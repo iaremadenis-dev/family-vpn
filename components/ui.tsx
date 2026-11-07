@@ -3,29 +3,31 @@
 import { useEffect, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cx } from "@/lib/cx";
 
-export const panelClass =
-  "rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900";
+export const panelClass = "border border-line bg-panel text-ink";
 
 export const inputClass =
-  "h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-950 outline-none transition-colors placeholder:text-zinc-400 focus:border-teal-700 focus:ring-2 focus:ring-teal-700/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:focus:border-teal-400 dark:focus:ring-teal-400/20";
+  "h-9 w-full border border-line bg-canvas px-3 font-mono text-sm text-ink outline-none transition-colors placeholder:text-muted focus:border-accent";
 
 const buttonStyles = {
-  primary:
-    "bg-teal-800 text-white hover:bg-teal-900 dark:bg-teal-400 dark:text-teal-950 dark:hover:bg-teal-300",
-  secondary:
-    "border border-zinc-200 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800",
-  danger:
-    "border border-rose-200 bg-white text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:bg-zinc-900 dark:text-rose-300 dark:hover:bg-rose-950/40",
-  ghost:
-    "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800",
+  primary: "bg-accent text-accent-ink hover:brightness-110",
+  secondary: "border border-line bg-panel text-ink hover:border-accent hover:text-accent",
+  danger: "border border-bad/40 bg-panel text-bad hover:bg-bad/10",
+  ghost: "text-muted hover:bg-inset hover:text-ink",
+} as const;
+
+const buttonSizes = {
+  md: "h-9 px-3 text-sm",
+  sm: "h-7 px-2 text-xs",
 } as const;
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: keyof typeof buttonStyles;
+  size?: keyof typeof buttonSizes;
 };
 
 export function Button({
   variant = "primary",
+  size = "md",
   className,
   type = "button",
   ...props
@@ -34,7 +36,8 @@ export function Button({
     <button
       type={type}
       className={cx(
-        "inline-flex h-10 items-center justify-center gap-2 rounded-lg px-3.5 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700 disabled:cursor-not-allowed disabled:opacity-50 dark:focus-visible:outline-teal-300",
+        "inline-flex items-center justify-center gap-2 font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-45",
+        buttonSizes[size],
         buttonStyles[variant],
         className,
       )}
@@ -45,31 +48,26 @@ export function Button({
 
 export function DemoChip() {
   return (
-    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-amber-900 uppercase dark:bg-amber-900/60 dark:text-amber-100">
-      демо
+    <span className="border border-warn/50 px-1 font-mono text-[9px] tracking-[0.14em] text-warn uppercase">
+      demo
     </span>
   );
 }
 
 export function DemoNote({ children }: { children: ReactNode }) {
   return (
-    <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:bg-amber-950/40 dark:text-amber-100">
+    <p className="border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-ink">
       {children}
     </p>
   );
 }
 
-const badgeStyles = {
-  online:
-    "bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-200 dark:ring-emerald-900",
-  degraded:
-    "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-900",
-  offline:
-    "bg-zinc-100 text-zinc-600 ring-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700",
-  active:
-    "bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-200 dark:ring-emerald-900",
-  revoked:
-    "bg-rose-50 text-rose-800 ring-rose-200 dark:bg-rose-950/50 dark:text-rose-200 dark:ring-rose-900",
+const ledStyles = {
+  online: "bg-ok",
+  degraded: "bg-warn",
+  offline: "bg-muted",
+  active: "bg-ok",
+  revoked: "bg-bad",
 } as const;
 
 const badgeLabels = {
@@ -83,41 +81,38 @@ const badgeLabels = {
 export function StatusBadge({
   status,
 }: {
-  status: keyof typeof badgeStyles;
+  status: keyof typeof ledStyles;
 }) {
   return (
-    <span
-      className={cx(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1",
-        badgeStyles[status],
-      )}
-    >
+    <span className="inline-flex items-center gap-1.5 border border-line bg-canvas px-1.5 py-0.5 font-mono text-[10px] tracking-[0.12em] text-ink uppercase">
+      <span className={cx("h-1.5 w-1.5", ledStyles[status])} />
       {badgeLabels[status]}
     </span>
   );
 }
 
 export function PageHeader({
+  kicker,
   title,
   description,
   action,
 }: {
+  kicker: string;
   title: string;
   description: string;
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div className="max-w-2xl">
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          {description}
+    <div className="flex flex-col gap-3 border border-line bg-panel px-4 py-3 sm:flex-row sm:items-end sm:justify-between">
+      <div className="max-w-3xl">
+        <p className="font-mono text-[10px] tracking-[0.18em] text-accent uppercase">
+          {kicker}
         </p>
+        <h1 className="mt-1 text-xl font-semibold tracking-tight text-ink">{title}</h1>
+        <p className="mt-1 text-sm text-muted">{description}</p>
       </div>
       {action ? (
-        <div className="sm:shrink-0 [&>button]:w-full sm:[&>button]:w-auto">
-          {action}
-        </div>
+        <div className="sm:shrink-0 [&>button]:w-full sm:[&>button]:w-auto">{action}</div>
       ) : null}
     </div>
   );
@@ -131,9 +126,9 @@ export function EmptyState({
   text: string;
 }) {
   return (
-    <div className="rounded-xl border border-dashed border-zinc-300 bg-white px-5 py-10 text-center dark:border-zinc-700 dark:bg-zinc-900">
-      <p className="font-medium">{title}</p>
-      <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{text}</p>
+    <div className="border border-dashed border-line bg-panel px-5 py-10 text-center">
+      <p className="font-mono text-xs tracking-[0.14em] text-ink uppercase">{title}</p>
+      <p className="mt-2 text-sm text-muted">{text}</p>
     </div>
   );
 }
@@ -151,13 +146,14 @@ export function Field({
 }) {
   return (
     <div>
-      <label htmlFor={id} className="mb-1.5 block text-sm font-medium">
+      <label
+        htmlFor={id}
+        className="mb-1.5 block font-mono text-[10px] tracking-[0.14em] text-muted uppercase"
+      >
         {label}
       </label>
       {children}
-      {hint ? (
-        <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">{hint}</p>
-      ) : null}
+      {hint ? <p className="mt-1.5 text-xs text-muted">{hint}</p> : null}
     </div>
   );
 }
@@ -191,25 +187,26 @@ export function Dialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center">
-      <div
-        className="absolute inset-0 bg-zinc-950/50"
-        onClick={onClose}
-        aria-hidden="true"
-      />
+      <div className="absolute inset-0 bg-black/70" onClick={onClose} aria-hidden="true" />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="dialog-title"
-        className="relative z-10 max-h-[min(90dvh,40rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-zinc-200 bg-white p-5 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+        className="relative z-10 max-h-[min(90dvh,40rem)] w-full max-w-lg overflow-y-auto border border-line bg-panel p-4"
       >
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <h2 id="dialog-title" className="text-lg font-semibold">
-            {title}
-          </h2>
+        <div className="mb-4 flex items-start justify-between gap-3 border-b border-line pb-3">
+          <div>
+            <p className="font-mono text-[10px] tracking-[0.16em] text-accent uppercase">
+              local action
+            </p>
+            <h2 id="dialog-title" className="mt-1 text-base font-semibold text-ink">
+              {title}
+            </h2>
+          </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg px-2 text-xl leading-none text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            className="border border-line px-2 text-lg leading-none text-muted hover:border-accent hover:text-ink"
             aria-label="Закрыть"
           >
             ×

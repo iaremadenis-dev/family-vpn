@@ -254,13 +254,13 @@ export function DemoProvider({ children }: { children: ReactNode }) {
         <div className="pointer-events-none fixed inset-x-0 bottom-20 z-50 flex justify-center px-4 md:bottom-6">
           <div
             role="status"
-            className="pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-800 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+            className="pointer-events-auto flex w-full max-w-md items-start gap-3 border border-line border-l-accent bg-panel px-3 py-2.5 text-sm text-ink"
           >
             <p className="flex-1">{notice}</p>
             <button
               type="button"
               onClick={dismissNotice}
-              className="rounded-md px-1 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+              className="px-1 font-mono text-muted hover:text-ink"
               aria-label="Закрыть уведомление"
             >
               ×

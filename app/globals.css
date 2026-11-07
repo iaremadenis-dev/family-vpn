@@ -5,18 +5,66 @@
 @theme inline {
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --color-canvas: var(--canvas);
+  --color-panel: var(--panel);
+  --color-inset: var(--inset);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-info: var(--info);
 }
 
-html {
+:root {
   color-scheme: light;
-  background: #f4f4f5;
+  --canvas: #e4edf3;
+  --panel: #f5f9fb;
+  --inset: #d5e2eb;
+  --line: #b4c5d2;
+  --ink: #0b1622;
+  --muted: #4e6172;
+  --accent: #0e7490;
+  --accent-ink: #f4fdff;
+  --ok: #047857;
+  --warn: #b45309;
+  --bad: #be123c;
+  --info: #1d4ed8;
 }
 
 html.dark {
   color-scheme: dark;
-  background: #09090b;
+  --canvas: #070c12;
+  --panel: #0e1621;
+  --inset: #162232;
+  --line: #243648;
+  --ink: #e7eef6;
+  --muted: #8ea3b8;
+  --accent: #22d3ee;
+  --accent-ink: #04252c;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  --info: #60a5fa;
+}
+
+html {
+  background: var(--canvas);
 }
 
 body {
   font-family: var(--font-sans), "Segoe UI", sans-serif;
+  background-color: var(--canvas);
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--line) 42%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--line) 42%, transparent) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--ink);
 }

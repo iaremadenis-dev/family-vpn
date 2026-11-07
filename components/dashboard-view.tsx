@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { useDemo } from "@/components/demo-provider";
-import { panelClass, StatusBadge } from "@/components/ui";
+import { StatusBadge } from "@/components/ui";
+import { cx } from "@/lib/cx";
 import { formatBytes, formatCount } from "@/lib/format";
 
 export function DashboardView() {
@@ -11,25 +13,32 @@ export function DashboardView() {
   const degraded = servers.filter((server) => server.status === "degraded").length;
   const offline = servers.filter((server) => server.status === "offline").length;
   const active = configurations.filter((config) => config.status === "active").length;
+  const revoked = configurations.length - active;
   const received = servers.reduce((sum, server) => sum + server.rxBytes, 0);
   const sent = servers.reduce((sum, server) => sum + server.txBytes, 0);
+  const totalTraffic = received + sent;
   const defaultServer = servers.find((server) => server.isDefault);
   const peak = Math.max(
     ...servers.map((server) => server.rxBytes + server.txBytes),
     1,
   );
+  const rxShare = totalTraffic === 0 ? 0 : Math.round((received / totalTraffic) * 100);
 
   return (
-    <div className="flex flex-col gap-5">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Обзор</h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Сводка по серверам, конфигурациям и примерному трафику.
+    <div className="flex flex-col gap-4">
+      <div className="border border-line bg-panel px-4 py-3">
+        <p className="font-mono text-[10px] tracking-[0.18em] text-accent uppercase">
+          dashboard
+        </p>
+        <h1 className="mt-1 text-xl font-semibold tracking-tight text-ink">Обзор</h1>
+        <p className="mt-1 text-sm text-muted">
+          Сводка по узлам WireGuard, конфигурациям и примерному трафику.
         </p>
       </div>
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-1 gap-px border border-line bg-line sm:grid-cols-2 xl:grid-cols-4">
         <Stat
+          index="01"
           label="Серверы"
           value={String(servers.length)}
           hint={
@@ -39,131 +48,166 @@ export function DashboardView() {
           }
         />
         <Stat
+          index="02"
           label="Конфигурации"
           value={String(configurations.length)}
-          hint={`${active} активных`}
+          hint={`${formatCount(active, ["активная", "активные", "активных"])} · ${formatCount(revoked, ["отозвана", "отозваны", "отозвано"])}`}
         />
         <Stat
-          label="В сети"
-          value={String(online)}
+          index="03"
+          label="Online / offline"
+          value={
+            <span>
+              <span className="text-ok">{online}</span>
+              <span className="text-muted"> / </span>
+              <span className={offline > 0 ? "text-bad" : "text-ink"}>{offline}</span>
+            </span>
+          }
           hint={
-            offline > 0
-              ? `${formatCount(offline, ["сервер не в сети", "сервера не в сети", "серверов не в сети"])}`
-              : "Нет серверов вне сети"
+            servers.length === 0
+              ? "Узлов нет"
+              : degraded > 0
+                ? formatCount(degraded, [
+                    "нестабильный узел",
+                    "нестабильных узла",
+                    "нестабильных узлов",
+                  ])
+                : offline > 0
+                  ? formatCount(offline, [
+                      "сервер не в сети",
+                      "сервера не в сети",
+                      "серверов не в сети",
+                    ])
+                  : "Все узлы в сети"
           }
         />
         <Stat
+          index="04"
           label="Трафик"
-          value={formatBytes(received + sent)}
-          hint={`Принято ${formatBytes(received)} · отправлено ${formatBytes(sent)}`}
+          value={formatBytes(totalTraffic)}
+          hint={`RX ${formatBytes(received)} · TX ${formatBytes(sent)}`}
+          meter={rxShare}
         />
       </section>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className={panelClass}>
+      <div className="grid gap-4 xl:grid-cols-5">
+        <section className="border border-line bg-panel xl:col-span-3">
           <SectionTitle href="/servers" action="Все серверы">
-            Состояние VPN-серверов
+            Узлы
           </SectionTitle>
           {servers.length === 0 ? (
-            <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
+            <p className="px-4 py-6 text-sm text-muted">
               Серверов в демонстрационном списке нет.
             </p>
           ) : (
-            <ul className="mt-4 divide-y divide-zinc-200 dark:divide-zinc-800">
+            <ul>
               {servers.map((server) => (
                 <li
                   key={server.id}
-                  className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+                  className="grid gap-2 border-b border-line px-4 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1.1fr)_auto] sm:items-center"
                 >
                   <div className="min-w-0">
-                    <p className="truncate font-medium">
+                    <p className="truncate font-mono text-sm text-ink">
                       {server.name}
-                      <span className="font-normal text-zinc-500 dark:text-zinc-400">
-                        {" "}
-                        · {server.location}
-                      </span>
+                      {server.isDefault ? (
+                        <span className="ml-2 text-[10px] tracking-[0.12em] text-info uppercase">
+                          default
+                        </span>
+                      ) : null}
                     </p>
-                    <p className="mt-0.5 font-mono text-xs text-zinc-500 dark:text-zinc-400">
-                      {server.endpoint}:{server.listenPort}
-                    </p>
+                    <p className="mt-0.5 truncate text-xs text-muted">{server.location}</p>
                   </div>
+                  <p className="truncate font-mono text-xs text-muted">
+                    {server.endpoint}:{server.listenPort}
+                  </p>
                   <StatusBadge status={server.status} />
                 </li>
               ))}
             </ul>
           )}
-          <dl className="mt-4 grid grid-cols-3 gap-3 border-t border-zinc-200 pt-4 text-sm dark:border-zinc-800">
-            <Count label="В сети" value={online} />
-            <Count label="Нестабильны" value={degraded} />
-            <Count label="Не в сети" value={offline} />
+          <dl className="grid grid-cols-3 border-t border-line">
+            <Count label="В сети" value={online} tone="ok" />
+            <Count label="Нестабильны" value={degraded} tone="warn" />
+            <Count label="Не в сети" value={offline} tone="bad" />
           </dl>
         </section>
 
-        <section className={panelClass}>
-          <h2 className="text-sm font-semibold">Общая статистика трафика</h2>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            Сумма примерных счётчиков. Опрос серверов не выполняется.
-          </p>
-          <dl className="mt-4 grid grid-cols-2 gap-3">
-            <Mini label="Принято" value={formatBytes(received)} />
-            <Mini label="Отправлено" value={formatBytes(sent)} />
-          </dl>
-          {servers.length === 0 ? (
-            <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
-              Нет данных для сравнения.
+        <section className="border border-line bg-panel xl:col-span-2">
+          <div className="border-b border-line px-4 py-2">
+            <h2 className="font-mono text-[11px] tracking-[0.16em] text-muted uppercase">
+              Трафик узлов
+            </h2>
+          </div>
+          <div className="px-4 py-3">
+            <p className="text-sm text-muted">
+              Сумма примерных счётчиков. Опрос серверов не выполняется.
             </p>
-          ) : (
-            <ul className="mt-5 space-y-3">
-              {servers.map((server) => {
-                const total = server.rxBytes + server.txBytes;
-                const width =
-                  total === 0 ? 0 : Math.max(4, Math.round((total / peak) * 100));
-                return (
-                  <li key={server.id}>
-                    <div className="mb-1 flex items-center justify-between gap-3 text-sm">
-                      <span className="truncate">{server.name}</span>
-                      <span className="shrink-0 tabular-nums text-zinc-500 dark:text-zinc-400">
-                        {formatBytes(total)}
-                      </span>
-                    </div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-                      <div
-                        className="h-full rounded-full bg-teal-700 dark:bg-teal-400"
-                        style={{ width: `${width}%` }}
-                      />
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+            <dl className="mt-3 grid grid-cols-2 gap-px bg-line">
+              <Mini label="RX" value={formatBytes(received)} />
+              <Mini label="TX" value={formatBytes(sent)} />
+            </dl>
+            {servers.length === 0 ? (
+              <p className="mt-4 text-sm text-muted">Нет данных для сравнения.</p>
+            ) : (
+              <ul className="mt-4 space-y-3">
+                {servers.map((server) => {
+                  const total = server.rxBytes + server.txBytes;
+                  const width =
+                    total === 0 ? 0 : Math.max(4, Math.round((total / peak) * 100));
+                  return (
+                    <li key={server.id}>
+                      <div className="mb-1 flex items-center justify-between gap-3 font-mono text-xs">
+                        <span className="truncate text-ink">{server.name}</span>
+                        <span className="shrink-0 text-muted tabular-nums">
+                          {formatBytes(total)}
+                        </span>
+                      </div>
+                      <div className="h-1.5 bg-inset">
+                        <div
+                          className={cx(
+                            "h-full",
+                            server.status === "online"
+                              ? "bg-accent"
+                              : server.status === "degraded"
+                                ? "bg-warn"
+                                : "bg-muted",
+                          )}
+                          style={{ width: `${width}%` }}
+                        />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
         </section>
       </div>
 
-      <section className={panelClass}>
+      <section className="border border-line bg-panel">
         <SectionTitle href="/configurations" action="Все конфигурации">
           Конфигурации
         </SectionTitle>
         {configurations.length === 0 ? (
-          <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="px-4 py-6 text-sm text-muted">
             Конфигураций в демонстрационном списке нет.
           </p>
         ) : (
-          <ul className="mt-2 divide-y divide-zinc-200 dark:divide-zinc-800">
+          <ul>
             {configurations.map((config) => {
               const server = servers.find((item) => item.id === config.serverId);
               return (
                 <li
                   key={config.id}
-                  className="flex items-center justify-between gap-3 py-3"
+                  className="grid gap-2 border-b border-line px-4 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto] sm:items-center"
                 >
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{config.name}</p>
-                    <p className="mt-0.5 truncate text-sm text-zinc-500 dark:text-zinc-400">
-                      {server ? server.name : "Сервер удалён"} ·{" "}
-                      {formatBytes(config.rxBytes + config.txBytes)}
-                    </p>
-                  </div>
+                  <p className="truncate font-medium text-ink">{config.name}</p>
+                  <p className="truncate font-mono text-xs text-muted">
+                    {server ? server.name : "сервер удалён"}
+                  </p>
+                  <p className="font-mono text-xs text-muted tabular-nums">
+                    {formatBytes(config.rxBytes + config.txBytes)}
+                  </p>
                   <StatusBadge status={config.status} />
                 </li>
               );
@@ -176,21 +220,45 @@ export function DashboardView() {
 }
 
 function Stat({
+  index,
   label,
   value,
   hint,
+  tone = "ink",
+  meter,
 }: {
+  index: string;
   label: string;
-  value: string;
+  value: ReactNode;
   hint: string;
+  tone?: "ink" | "ok" | "warn" | "bad";
+  meter?: number;
 }) {
+  const toneClass = {
+    ink: "text-ink",
+    ok: "text-ok",
+    warn: "text-warn",
+    bad: "text-bad",
+  }[tone];
+
   return (
-    <article className={panelClass}>
-      <p className="text-sm text-zinc-500 dark:text-zinc-400">{label}</p>
-      <p className="mt-2 text-3xl font-semibold tracking-tight tabular-nums">
+    <article className="bg-panel px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="font-mono text-[10px] tracking-[0.16em] text-muted uppercase">
+          {label}
+        </p>
+        <span className="font-mono text-[10px] text-accent">{index}</span>
+      </div>
+      <p className={cx("mt-2 font-mono text-2xl text-ink tabular-nums", toneClass)}>
         {value}
       </p>
-      <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">{hint}</p>
+      <p className="mt-1 text-xs text-muted">{hint}</p>
+      {meter !== undefined ? (
+        <div className="mt-2 flex h-1 bg-inset">
+          <div className="bg-accent" style={{ width: `${meter}%` }} />
+          <div className="bg-info" style={{ width: `${100 - meter}%` }} />
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -205,11 +273,13 @@ function SectionTitle({
   children: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <h2 className="text-sm font-semibold">{children}</h2>
+    <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-2">
+      <h2 className="font-mono text-[11px] tracking-[0.16em] text-muted uppercase">
+        {children}
+      </h2>
       <Link
         href={href}
-        className="text-sm font-medium text-teal-800 hover:underline dark:text-teal-300"
+        className="font-mono text-[11px] tracking-[0.12em] text-accent uppercase hover:text-ink"
       >
         {action}
       </Link>
@@ -217,20 +287,38 @@ function SectionTitle({
   );
 }
 
-function Count({ label, value }: { label: string; value: number }) {
+function Count({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "ok" | "warn" | "bad";
+}) {
+  const toneClass = {
+    ok: "text-ok",
+    warn: "text-warn",
+    bad: "text-bad",
+  }[tone];
+
   return (
-    <div>
-      <dt className="text-zinc-500 dark:text-zinc-400">{label}</dt>
-      <dd className="mt-1 text-lg font-semibold tabular-nums">{value}</dd>
+    <div className="border-r border-line px-4 py-3 last:border-r-0">
+      <dt className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
+        {label}
+      </dt>
+      <dd className={cx("mt-1 font-mono text-lg tabular-nums", toneClass)}>{value}</dd>
     </div>
   );
 }
 
 function Mini({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-950">
-      <dt className="text-xs text-zinc-500 dark:text-zinc-400">{label}</dt>
-      <dd className="mt-1 font-medium tabular-nums">{value}</dd>
+    <div className="bg-inset px-3 py-2">
+      <dt className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
+        {label}
+      </dt>
+      <dd className="mt-1 font-mono text-sm text-ink tabular-nums">{value}</dd>
     </div>
   );
 }

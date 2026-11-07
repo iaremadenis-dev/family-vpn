@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { useDemo } from "@/components/demo-provider";
 import {
   Button,
@@ -12,8 +12,8 @@ import {
   PageHeader,
   StatusBadge,
   inputClass,
-  panelClass,
 } from "@/components/ui";
+import { cx } from "@/lib/cx";
 import { formatBytes, formatCount, formatDateTime } from "@/lib/format";
 import type { ServerInput, VpnServer } from "@/lib/types";
 
@@ -23,6 +23,9 @@ type DialogState =
   | { type: "edit"; server: VpnServer }
   | { type: "delete"; server: VpnServer }
   | { type: "status"; server: VpnServer };
+
+const serverGrid =
+  "grid gap-3 md:grid-cols-[minmax(0,1.15fr)_minmax(0,0.9fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_minmax(0,0.7fr)_minmax(0,1.25fr)] md:items-center";
 
 export function ServersView() {
   const {
@@ -36,10 +39,15 @@ export function ServersView() {
   } = useDemo();
   const [dialog, setDialog] = useState<DialogState>({ type: "closed" });
   const close = () => setDialog({ type: "closed" });
+  const peak = Math.max(
+    ...servers.map((server) => server.rxBytes + server.txBytes),
+    1,
+  );
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
+        kicker="nodes"
         title="Серверы"
         description="Один сервер обслуживает много конфигураций. Каждая конфигурация привязана только к одному серверу."
         action={
@@ -56,90 +64,122 @@ export function ServersView() {
           text="Добавьте запись в демонстрационный список. Реальный VPS при этом не создаётся."
         />
       ) : (
-        <div className="grid gap-4">
+        <div className="border border-line bg-panel">
+          <div
+            className={cx(
+              serverGrid,
+              "hidden border-b border-line bg-inset px-4 py-2 font-mono text-[10px] tracking-[0.14em] text-muted uppercase md:grid",
+            )}
+          >
+            <span>Узел</span>
+            <span>Локация</span>
+            <span>Endpoint</span>
+            <span>Статус</span>
+            <span>Конфиги</span>
+            <span>Трафик</span>
+          </div>
           {servers.map((server) => {
             const related = configurations.filter(
               (config) => config.serverId === server.id,
             );
             const active = related.filter((config) => config.status === "active");
+            const total = server.rxBytes + server.txBytes;
+            const share =
+              total === 0 ? 0 : Math.max(4, Math.round((total / peak) * 100));
             return (
-              <article key={server.id} className={panelClass}>
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-lg font-semibold">{server.name}</h2>
-                      {server.isDefault ? (
-                        <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-800 ring-1 ring-teal-200 dark:bg-teal-950/50 dark:text-teal-200 dark:ring-teal-900">
-                          По умолчанию
-                        </span>
-                      ) : null}
-                      <StatusBadge status={server.status} />
-                    </div>
-                    <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                      {server.location}
-                    </p>
-                    <p className="mt-2 font-mono text-sm">
+              <article key={server.id} className="border-b border-line last:border-b-0">
+                <div className={cx(serverGrid, "px-4 py-3")}>
+                  <Cell label="Узел">
+                    <p className="truncate font-mono text-sm text-ink">{server.name}</p>
+                    {server.isDefault ? (
+                      <p className="mt-1 font-mono text-[10px] tracking-[0.12em] text-info uppercase">
+                        по умолчанию
+                      </p>
+                    ) : null}
+                  </Cell>
+                  <Cell label="Локация">
+                    <p className="truncate text-sm text-ink">{server.location}</p>
+                  </Cell>
+                  <Cell label="Endpoint">
+                    <p className="truncate font-mono text-sm text-ink">
                       {server.endpoint}:{server.listenPort}
                     </p>
-                  </div>
-                  <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-                    <div>
-                      <dt className="text-zinc-500 dark:text-zinc-400">Принято</dt>
-                      <dd className="font-medium tabular-nums">
-                        {formatBytes(server.rxBytes)}
-                      </dd>
+                  </Cell>
+                  <Cell label="Статус">
+                    <StatusBadge status={server.status} />
+                  </Cell>
+                  <Cell label="Конфиги">
+                    <p className="font-mono text-sm text-ink tabular-nums">
+                      {active.length}
+                      <span className="text-muted">/{related.length}</span>
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-muted">активные</p>
+                  </Cell>
+                  <Cell label="Трафик">
+                    <p className="font-mono text-sm text-ink tabular-nums">
+                      {formatBytes(total)}
+                    </p>
+                    <div className="mt-1.5 h-1 bg-inset">
+                      <div
+                        className={cx(
+                          "h-full",
+                          server.status === "offline" ? "bg-muted" : "bg-accent",
+                        )}
+                        style={{ width: `${share}%` }}
+                      />
                     </div>
-                    <div>
-                      <dt className="text-zinc-500 dark:text-zinc-400">
-                        Отправлено
-                      </dt>
-                      <dd className="font-medium tabular-nums">
-                        {formatBytes(server.txBytes)}
-                      </dd>
-                    </div>
-                  </dl>
+                    <p className="mt-1 font-mono text-[10px] text-muted">
+                      RX {formatBytes(server.rxBytes)} · TX {formatBytes(server.txBytes)}
+                    </p>
+                  </Cell>
                 </div>
-                <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
-                  {formatCount(active.length, [
-                    "активная конфигурация",
-                    "активные конфигурации",
-                    "активных конфигураций",
-                  ])}
-                  {" · "}
-                  {server.checkedAt
-                    ? `пример проверки ${formatDateTime(server.checkedAt)}`
-                    : "проверка не выполнялась"}
-                </p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Button
-                    variant="secondary"
-                    onClick={() => setDialog({ type: "status", server })}
-                  >
-                    Статус
-                    <DemoChip />
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => setDialog({ type: "edit", server })}
-                  >
-                    Изменить
-                    <DemoChip />
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    disabled={server.isDefault}
-                    onClick={() => setDefaultServer(server.id)}
-                  >
-                    Сделать по умолчанию
-                    <DemoChip />
-                  </Button>
-                  <Button
-                    variant="danger"
-                    onClick={() => setDialog({ type: "delete", server })}
-                  >
-                    Удалить
-                    <DemoChip />
-                  </Button>
+                <div className="flex flex-col gap-2 border-t border-line bg-inset/60 px-4 py-2 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="font-mono text-[11px] text-muted">
+                    {formatCount(active.length, [
+                      "активная конфигурация",
+                      "активные конфигурации",
+                      "активных конфигураций",
+                    ])}
+                    {" · "}
+                    {server.checkedAt
+                      ? `пример проверки ${formatDateTime(server.checkedAt)}`
+                      : "проверка не выполнялась"}
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setDialog({ type: "status", server })}
+                    >
+                      Статус
+                      <DemoChip />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setDialog({ type: "edit", server })}
+                    >
+                      Изменить
+                      <DemoChip />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={server.isDefault}
+                      onClick={() => setDefaultServer(server.id)}
+                    >
+                      Сделать по умолчанию
+                      <DemoChip />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      onClick={() => setDialog({ type: "delete", server })}
+                    >
+                      Удалить
+                      <DemoChip />
+                    </Button>
+                  </div>
                 </div>
               </article>
             );
@@ -158,11 +198,7 @@ export function ServersView() {
         }}
       />
 
-      <Dialog
-        open={dialog.type === "delete"}
-        title="Удалить сервер"
-        onClose={close}
-      >
+      <Dialog open={dialog.type === "delete"} title="Удалить сервер" onClose={close}>
         {dialog.type === "delete" ? (
           <DeleteServer
             server={dialog.server}
@@ -179,19 +215,14 @@ export function ServersView() {
         ) : null}
       </Dialog>
 
-      <Dialog
-        open={dialog.type === "status"}
-        title="Статус и статистика"
-        onClose={close}
-      >
+      <Dialog open={dialog.type === "status"} title="Статус и статистика" onClose={close}>
         {dialog.type === "status" ? (
           <StatusDetails
             server={dialog.server}
             activeConfigs={
               configurations.filter(
                 (config) =>
-                  config.serverId === dialog.server.id &&
-                  config.status === "active",
+                  config.serverId === dialog.server.id && config.status === "active",
               ).length
             }
             onRefresh={() =>
@@ -202,6 +233,17 @@ export function ServersView() {
           />
         ) : null}
       </Dialog>
+    </div>
+  );
+}
+
+function Cell({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <p className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase md:hidden">
+        {label}
+      </p>
+      <div className="mt-0.5 md:mt-0">{children}</div>
     </div>
   );
 }
@@ -223,7 +265,7 @@ function DeleteServer({
         Демонстрация. Запись исчезнет только из этого окна. VPS и WireGuard не
         затрагиваются.
       </DemoNote>
-      <p className="text-sm">
+      <p className="text-sm text-ink">
         Удалить сервер «{server.name}»
         {configCount > 0
           ? ` вместе с ${formatCount(configCount, ["связанной конфигурацией", "связанными конфигурациями", "связанными конфигурациями"])}`
@@ -258,26 +300,18 @@ function StatusDetails({
       </DemoNote>
       <div className="flex items-center gap-2">
         <StatusBadge status={server.status} />
-        <span className="text-sm text-zinc-500 dark:text-zinc-400">
-          {server.location}
-        </span>
+        <span className="text-sm text-muted">{server.location}</span>
       </div>
-      <dl className="grid gap-3 text-sm sm:grid-cols-2">
+      <dl className="grid gap-px bg-line text-sm sm:grid-cols-2">
         <Info label="Адрес" value={`${server.endpoint}:${server.listenPort}`} mono />
-        <Info
-          label="Активные конфигурации"
-          value={String(activeConfigs)}
-        />
+        <Info label="Активные конфигурации" value={String(activeConfigs)} />
         <Info label="Принято" value={formatBytes(server.rxBytes)} />
         <Info label="Отправлено" value={formatBytes(server.txBytes)} />
         <Info
           label="Пример проверки"
           value={server.checkedAt ? formatDateTime(server.checkedAt) : "не выполнялась"}
         />
-        <Info
-          label="По умолчанию"
-          value={server.isDefault ? "да" : "нет"}
-        />
+        <Info label="По умолчанию" value={server.isDefault ? "да" : "нет"} />
       </dl>
       <div className="flex justify-end">
         <Button variant="secondary" onClick={onRefresh}>
@@ -299,9 +333,11 @@ function Info({
   mono?: boolean;
 }) {
   return (
-    <div className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-950">
-      <dt className="text-xs text-zinc-500 dark:text-zinc-400">{label}</dt>
-      <dd className={mono ? "mt-1 font-mono text-sm" : "mt-1 font-medium"}>
+    <div className="bg-inset px-3 py-2">
+      <dt className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
+        {label}
+      </dt>
+      <dd className={mono ? "mt-1 font-mono text-sm text-ink" : "mt-1 font-medium text-ink"}>
         {value}
       </dd>
     </div>
@@ -425,7 +461,7 @@ function ServerForm({
           onChange={(event) => setPort(event.target.value)}
         />
       </Field>
-      {error ? <p className="text-sm text-rose-700 dark:text-rose-300">{error}</p> : null}
+      {error ? <p className="text-sm text-bad">{error}</p> : null}
       <div className="flex flex-wrap justify-end gap-2">
         <Button variant="secondary" onClick={onClose}>
           Отмена

@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin", "cyrillic"],
 });
 
-const themeScript = `(function(){try{if(localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)})==="dark"){document.documentElement.classList.add("dark")}}catch(e){}})();`;
+const themeScript = `(function(){try{var t=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)});if(t==="light"){document.documentElement.classList.remove("dark")}else{document.documentElement.classList.add("dark")}}catch(e){document.documentElement.classList.add("dark")}})();`;
 
 export const metadata: Metadata = {
   title: {
@@ -30,10 +30,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="ru"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full bg-zinc-100 font-sans text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50">
+      <body className="min-h-full font-sans text-ink">
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
         <ThemeProvider>
           <DemoProvider>{children}</DemoProvider>

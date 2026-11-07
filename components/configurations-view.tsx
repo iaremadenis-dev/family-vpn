@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { useDemo } from "@/components/demo-provider";
 import {
   Button,
@@ -12,8 +12,8 @@ import {
   PageHeader,
   StatusBadge,
   inputClass,
-  panelClass,
 } from "@/components/ui";
+import { cx } from "@/lib/cx";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import type { VpnConfig } from "@/lib/types";
 
@@ -25,6 +25,9 @@ type DialogState =
   | { type: "revoke"; config: VpnConfig }
   | { type: "delete"; config: VpnConfig }
   | { type: "artifact"; config: VpnConfig; artifact: Artifact };
+
+const configGrid =
+  "grid gap-3 md:grid-cols-[minmax(0,1.15fr)_minmax(0,1.15fr)_minmax(0,0.85fr)_minmax(0,1.15fr)_minmax(0,1.15fr)] md:items-center";
 
 export function ConfigurationsView() {
   const {
@@ -38,13 +41,14 @@ export function ConfigurationsView() {
   const close = () => setDialog({ type: "closed" });
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
+        kicker="peers"
         title="Конфигурации"
         description="Администратор создаёт конфигурации вручную. У каждой конфигурации один VPN-сервер."
         action={
           servers.length === 0 ? (
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            <p className="font-mono text-xs tracking-[0.12em] text-muted uppercase">
               Сначала добавьте VPN-сервер.
             </p>
           ) : (
@@ -62,73 +66,107 @@ export function ConfigurationsView() {
           text="Новая запись появится только в этом списке. Файл .conf и QR-код не формируются."
         />
       ) : (
-        <div className="grid gap-4">
+        <div className="border border-line bg-panel">
+          <div
+            className={cx(
+              configGrid,
+              "hidden border-b border-line bg-inset px-4 py-2 font-mono text-[10px] tracking-[0.14em] text-muted uppercase md:grid",
+            )}
+          >
+            <span>Конфигурация</span>
+            <span>Сервер</span>
+            <span>Статус</span>
+            <span>Трафик</span>
+            <span>Создана</span>
+          </div>
           {configurations.map((config) => {
             const server = servers.find((item) => item.id === config.serverId);
             const active = config.status === "active";
             return (
-              <article key={config.id} className={panelClass}>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-lg font-semibold">{config.name}</h2>
-                      <StatusBadge status={config.status} />
-                    </div>
-                    <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                      {server
-                        ? `${server.name} · ${server.location}`
-                        : "Сервер удалён из списка"}
+              <article key={config.id} className="border-b border-line last:border-b-0">
+                <div className={cx(configGrid, "px-4 py-3")}>
+                  <Cell label="Конфигурация">
+                    <p className="truncate font-medium text-ink">{config.name}</p>
+                    <p className="mt-0.5 truncate font-mono text-[10px] text-muted">
+                      {config.id}
                     </p>
-                  </div>
-                  <p className="text-sm tabular-nums text-zinc-500 dark:text-zinc-400">
-                    {formatBytes(config.rxBytes)} принято · {formatBytes(config.txBytes)}{" "}
-                    отправлено
-                  </p>
+                  </Cell>
+                  <Cell label="Сервер">
+                    <p className="truncate font-mono text-sm text-ink">
+                      {server ? server.name : "—"}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-muted">
+                      {server ? server.location : "Сервер удалён из списка"}
+                    </p>
+                  </Cell>
+                  <Cell label="Статус">
+                    <StatusBadge status={config.status} />
+                  </Cell>
+                  <Cell label="Трафик">
+                    <p className="font-mono text-sm text-ink tabular-nums">
+                      {formatBytes(config.rxBytes + config.txBytes)}
+                    </p>
+                    <p className="mt-0.5 font-mono text-[10px] text-muted">
+                      RX {formatBytes(config.rxBytes)} · TX {formatBytes(config.txBytes)}
+                    </p>
+                  </Cell>
+                  <Cell label="Создана">
+                    <p className="font-mono text-xs text-ink">
+                      {formatDateTime(config.createdAt)}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-muted">
+                      {config.lastHandshake
+                        ? `handshake ${formatDateTime(config.lastHandshake)}`
+                        : "рукопожатия нет"}
+                    </p>
+                  </Cell>
                 </div>
-                <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-                  Создана {formatDateTime(config.createdAt)}
-                  {" · "}
-                  {config.lastHandshake
-                    ? `последнее рукопожатие ${formatDateTime(config.lastHandshake)}`
-                    : "рукопожатия нет"}
-                </p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {active ? (
-                    <>
+                <div className="flex flex-col gap-2 border-t border-line bg-inset/60 px-4 py-2 lg:flex-row lg:items-center lg:justify-between">
+                  <p className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
+                    export
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={!active}
+                      onClick={() =>
+                        setDialog({ type: "artifact", config, artifact: "conf" })
+                      }
+                    >
+                      .conf
+                      <DemoChip />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={!active}
+                      onClick={() =>
+                        setDialog({ type: "artifact", config, artifact: "qr" })
+                      }
+                    >
+                      QR
+                      <DemoChip />
+                    </Button>
+                    {active ? (
                       <Button
-                        variant="secondary"
-                        onClick={() =>
-                          setDialog({ type: "artifact", config, artifact: "conf" })
-                        }
-                      >
-                        Скачать .conf
-                        <DemoChip />
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        onClick={() =>
-                          setDialog({ type: "artifact", config, artifact: "qr" })
-                        }
-                      >
-                        QR-код
-                        <DemoChip />
-                      </Button>
-                      <Button
+                        size="sm"
                         variant="danger"
                         onClick={() => setDialog({ type: "revoke", config })}
                       >
                         Отозвать
                         <DemoChip />
                       </Button>
-                    </>
-                  ) : null}
-                  <Button
-                    variant="danger"
-                    onClick={() => setDialog({ type: "delete", config })}
-                  >
-                    Удалить
-                    <DemoChip />
-                  </Button>
+                    ) : null}
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      onClick={() => setDialog({ type: "delete", config })}
+                    >
+                      Удалить
+                      <DemoChip />
+                    </Button>
+                  </div>
                 </div>
               </article>
             );
@@ -171,11 +209,7 @@ export function ConfigurationsView() {
         ) : null}
       </Dialog>
 
-      <Dialog
-        open={dialog.type === "delete"}
-        title="Удалить конфигурацию"
-        onClose={close}
-      >
+      <Dialog open={dialog.type === "delete"} title="Удалить конфигурацию" onClose={close}>
         {dialog.type === "delete" ? (
           <Confirm
             note="Демонстрация. Запись исчезнет только из этого окна."
@@ -211,6 +245,17 @@ export function ConfigurationsView() {
   );
 }
 
+function Cell({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <p className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase md:hidden">
+        {label}
+      </p>
+      <div className="mt-0.5 md:mt-0">{children}</div>
+    </div>
+  );
+}
+
 function Confirm({
   note,
   text,
@@ -227,7 +272,7 @@ function Confirm({
   return (
     <div className="flex flex-col gap-4">
       <DemoNote>{note}</DemoNote>
-      <p className="text-sm">{text}</p>
+      <p className="text-sm text-ink">{text}</p>
       <div className="flex flex-wrap justify-end gap-2">
         <Button variant="secondary" onClick={onClose}>
           Отмена
@@ -256,15 +301,22 @@ function ArtifactNotice({
         не строится.
       </DemoNote>
       {artifact === "qr" ? (
-        <div className="mx-auto flex h-44 w-44 items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-4 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400">
-          QR-код появится после подключения генерации
+        <div className="mx-auto grid h-44 w-44 place-items-center border border-dashed border-line bg-canvas p-4 text-center">
+          <div>
+            <p className="font-mono text-[10px] tracking-[0.16em] text-accent uppercase">
+              qr slot
+            </p>
+            <p className="mt-2 text-sm text-muted">
+              QR-код появится после подключения генерации
+            </p>
+          </div>
         </div>
       ) : (
-        <p className="rounded-lg bg-zinc-50 px-3 py-2 font-mono text-sm text-zinc-500 dark:bg-zinc-950 dark:text-zinc-400">
+        <p className="border border-line bg-canvas px-3 py-2 font-mono text-sm text-muted">
           {name}.conf — файл не создан
         </p>
       )}
-      <p className="text-sm text-zinc-600 dark:text-zinc-300">
+      <p className="text-sm text-muted">
         {artifact === "qr"
           ? `Для «${name}» нечего сканировать: в код не записываются адрес, ключи и настройки интерфейса.`
           : `Для «${name}» содержимое конфигурации не формируется и не отдаётся браузеру.`}
@@ -339,7 +391,7 @@ function CreateConfigForm({
           ))}
         </select>
       </Field>
-      {error ? <p className="text-sm text-rose-700 dark:text-rose-300">{error}</p> : null}
+      {error ? <p className="text-sm text-bad">{error}</p> : null}
       <div className="flex flex-wrap justify-end gap-2">
         <Button variant="secondary" onClick={onClose}>
           Отмена
