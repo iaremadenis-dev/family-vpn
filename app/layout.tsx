@@ -19,11 +19,11 @@ const themeScript = `(function(){try{if(localStorage.getItem(${JSON.stringify(TH
 
 export const metadata: Metadata = {
   title: {
-    default: "VPN Control",
-    template: "%s · VPN Control",
+    default: "Family VPN",
+    template: "%s · Family VPN",
   },
   description:
-    "Админ-панель для управления VPN-серверами WireGuard. Демонстрационный интерфейс без подключения к серверам.",
+    "Family VPN — админ-панель для управления VPN-серверами WireGuard. Демонстрационный интерфейс без подключения к серверам.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

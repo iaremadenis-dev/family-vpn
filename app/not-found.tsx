@@ -7,7 +7,7 @@ export default function NotFound() {
         <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">404</p>
         <h1 className="mt-2 text-2xl font-semibold">Страница не найдена</h1>
         <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-          Такого раздела в VPN Control нет.
+          Такого раздела в Family VPN нет.
         </p>
         <Link
           href="/"

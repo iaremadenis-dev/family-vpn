@@ -14,9 +14,9 @@ const ThemeContext = createContext<{
 } | null>(null);
 
 function subscribe(onStoreChange: () => void) {
-  window.addEventListener("vpn-control-theme-change", onStoreChange);
+  window.addEventListener("family-vpn-theme-change", onStoreChange);
   return () =>
-    window.removeEventListener("vpn-control-theme-change", onStoreChange);
+    window.removeEventListener("family-vpn-theme-change", onStoreChange);
 }
 
 function getSnapshot(): Theme {
@@ -33,7 +33,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   function setTheme(next: Theme) {
     document.documentElement.classList.toggle("dark", next === "dark");
     localStorage.setItem(THEME_STORAGE_KEY, next);
-    window.dispatchEvent(new Event("vpn-control-theme-change"));
+    window.dispatchEvent(new Event("family-vpn-theme-change"));
   }
 
   return (

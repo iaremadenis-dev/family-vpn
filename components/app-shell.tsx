@@ -79,7 +79,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             VC
           </span>
           <span>
-            <span className="block text-sm font-semibold">VPN Control</span>
+            <span className="block text-sm font-semibold">Family VPN</span>
             <span className="block text-xs text-zinc-500 dark:text-zinc-400">
               WireGuard
             </span>
@@ -103,7 +103,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-teal-800 text-xs font-semibold text-white dark:bg-teal-400 dark:text-teal-950">
             VC
           </span>
-          <span className="text-sm font-semibold">VPN Control</span>
+          <span className="text-sm font-semibold">Family VPN</span>
         </span>
         <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900/60 dark:text-amber-100">
           Демо
