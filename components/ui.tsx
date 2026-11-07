@@ -117,11 +117,11 @@ export function PageHeader({
   action?: ReactNode;
 }) {
   return (
-    <div className="glass flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="max-w-3xl">
         <p className="text-xs font-medium text-accent">{kicker}</p>
-        <h1 className="mt-1 text-xl font-semibold tracking-tight text-ink">{title}</h1>
-        <p className="mt-1 text-sm text-muted">{description}</p>
+        <h2 className="sr-only">{title}</h2>
+        <p className="text-sm text-muted">{description}</p>
       </div>
       {action ? (
         <div className="sm:shrink-0 [&>button]:w-full sm:[&>button]:w-auto">{action}</div>

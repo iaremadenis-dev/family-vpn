@@ -65,11 +65,11 @@ function NavLink({
           ? "flex flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px]"
           : "flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm",
         active
-          ? "bg-accent/15 text-ink shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_45%,transparent)]"
+          ? "bg-accent text-accent-ink shadow-[0_10px_24px_color-mix(in_srgb,var(--accent)_32%,transparent)]"
           : "text-muted hover:bg-inset hover:text-ink",
       )}
     >
-      <Icon className={cx("h-4 w-4 shrink-0", active && "text-accent")} />
+      <Icon className="h-4 w-4 shrink-0" />
       {label}
     </Link>
   );
@@ -96,35 +96,41 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const allOnline = servers.length > 0 && online === servers.length;
 
   return (
-    <div className="min-h-dvh md:pl-[16.75rem]">
-      <aside className="glass fixed top-3 bottom-3 left-3 z-30 hidden w-56 flex-col md:flex">
-        <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">
-          <Mark />
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold tracking-tight text-ink">
-              Family VPN
+    <div className="relative min-h-dvh md:pl-[16.75rem]">
+      <div className="scene" aria-hidden="true">
+        <Mountains className="scene-mountains" />
+      </div>
+      <aside className="glass sidebar-glass fixed top-3 bottom-3 left-3 z-30 hidden w-56 overflow-hidden md:flex md:flex-col">
+        <Mountains className="pointer-events-none absolute inset-x-0 bottom-0 h-48 w-full opacity-80" />
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col">
+          <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">
+            <Mark />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold tracking-tight text-ink">
+                Family VPN
+              </span>
+              <span className="block text-xs text-muted">WireGuard</span>
             </span>
-            <span className="block text-xs text-muted">WireGuard</span>
-          </span>
-        </div>
-        <nav className="flex flex-1 flex-col gap-1 px-2" aria-label="Разделы">
-          {navItems.map((item) => (
-            <NavLink key={item.href} {...item} />
-          ))}
-        </nav>
-        <div className="m-2 rounded-2xl bg-inset px-3 py-3">
-          <p className="truncate text-sm font-medium text-ink">{adminName}</p>
-          <p className="mt-0.5 text-xs text-muted">Локальная сессия</p>
+          </div>
+          <nav className="flex flex-1 flex-col gap-1 px-2" aria-label="Разделы">
+            {navItems.map((item) => (
+              <NavLink key={item.href} {...item} />
+            ))}
+          </nav>
+          <div className="relative z-10 m-3 rounded-2xl bg-canvas/75 px-3 py-3 backdrop-blur-md">
+            <p className="truncate text-sm font-medium text-ink">{adminName}</p>
+            <p className="mt-0.5 text-xs text-muted">Локальная сессия</p>
+          </div>
         </div>
       </aside>
 
-      <div className="flex flex-col gap-4 px-3 py-3 pb-28 md:px-5 md:py-4 md:pb-6">
-        <header className="glass sticky top-3 z-20 flex h-14 items-center justify-between gap-3 px-3 md:px-4">
+      <div className="relative z-10 flex flex-col gap-5 px-3 py-3 pb-28 md:px-5 md:py-4 md:pb-6">
+        <header className="glass sticky top-3 z-20 flex h-12 items-center justify-between gap-3 px-3 md:px-4">
           <div className="flex min-w-0 items-center gap-2.5">
             <span className="md:hidden">
               <Mark compact />
             </span>
-            <p className="truncate text-sm font-semibold text-ink">{title}</p>
+            <h1 className="truncate text-sm font-semibold text-ink">{title}</h1>
           </div>
           <div className="flex shrink-0 items-center gap-2 text-xs">
             <span
@@ -145,12 +151,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <p className="glass flex flex-col gap-1 px-4 py-3 text-sm text-muted sm:flex-row sm:items-baseline sm:gap-3">
-          <span className="text-xs font-medium text-warn">Демонстрация</span>
-          <span>
-            Цифры и списки — пример. Кнопки не обращаются к VPS и WireGuard: ключи и
-            файлы .conf не создаются, изменения не сохраняются.
-          </span>
+        <p className="px-1 text-xs leading-5 text-muted">
+          Цифры и списки — пример. Кнопки не обращаются к VPS и WireGuard: ключи и
+          файлы .conf не создаются, изменения не сохраняются.
         </p>
         {children}
       </div>
@@ -168,5 +171,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </ul>
       </nav>
     </div>
+  );
+}
+
+function Mountains({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 800 240" preserveAspectRatio="none" aria-hidden="true">
+      <path
+        d="M0 168 L90 112 L150 146 L230 78 L310 138 L390 52 L470 124 L560 70 L650 132 L730 96 L800 140 L800 240 L0 240 Z"
+        fill="var(--peak)"
+        opacity="0.55"
+      />
+      <path
+        d="M0 196 L120 150 L210 176 L300 124 L390 168 L500 112 L610 160 L720 130 L800 168 L800 240 L0 240 Z"
+        fill="var(--peak-deep)"
+        opacity="0.9"
+      />
+    </svg>
   );
 }

@@ -18,27 +18,15 @@ export function DashboardView() {
   const sent = servers.reduce((sum, server) => sum + server.txBytes, 0);
   const totalTraffic = received + sent;
   const defaultServer = servers.find((server) => server.isDefault);
-  const peak = Math.max(
-    ...servers.map((server) => server.rxBytes + server.txBytes),
-    1,
-  );
-  const rxShare = totalTraffic === 0 ? 0 : Math.round((received / totalTraffic) * 100);
+  const series = demoDaily(totalTraffic);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="glass px-5 py-4">
-        <p className="text-xs font-medium text-accent">WireGuard</p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-ink">Обзор</h1>
-        <p className="mt-1 text-sm text-muted">
-          Сводка по узлам WireGuard, конфигурациям и примерному трафику.
-        </p>
-      </div>
-
+    <div className="flex flex-col gap-5">
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat
-          index="01"
           label="Серверы"
           value={String(servers.length)}
+          wash="bg-accent/35"
           hint={
             defaultServer
               ? `По умолчанию ${defaultServer.name}`
@@ -46,14 +34,14 @@ export function DashboardView() {
           }
         />
         <Stat
-          index="02"
           label="Конфигурации"
           value={String(configurations.length)}
+          wash="bg-info/35"
           hint={`${formatCount(active, ["активная", "активные", "активных"])} · ${formatCount(revoked, ["отозвана", "отозваны", "отозвано"])}`}
         />
         <Stat
-          index="03"
           label="Online / offline"
+          wash="bg-ok/30"
           value={
             <span>
               <span className="text-ok">{online}</span>
@@ -80,32 +68,44 @@ export function DashboardView() {
           }
         />
         <Stat
-          index="04"
           label="Трафик"
           value={formatBytes(totalTraffic)}
+          wash="bg-accent/25"
           hint={`RX ${formatBytes(received)} · TX ${formatBytes(sent)}`}
-          meter={rxShare}
         />
       </section>
 
-      <div className="grid gap-4 xl:grid-cols-5">
-        <section className="glass overflow-hidden xl:col-span-3">
+      <div className="grid gap-5 xl:grid-cols-5">
+        <section className="glass px-5 py-5 xl:col-span-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-medium text-ink">Трафик за 30 дней</h2>
+              <p className="mt-1 text-xs text-muted">
+                Демонстрационная кривая по примерным счётчикам. Опрос не выполняется.
+              </p>
+            </div>
+            <p className="shrink-0 text-xs text-muted">30 дней</p>
+          </div>
+          <TrafficChart series={series} />
+        </section>
+
+        <section className="glass px-3 py-3 xl:col-span-2">
           <SectionTitle href="/servers" action="Все серверы">
-            Узлы
+            Серверы
           </SectionTitle>
           {servers.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-muted">
+            <p className="px-2 py-6 text-sm text-muted">
               Серверов в демонстрационном списке нет.
             </p>
           ) : (
-            <ul>
+            <ul className="space-y-1">
               {servers.map((server) => (
                 <li
                   key={server.id}
-                  className="grid gap-2 border-b border-line px-4 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1.1fr)_auto] sm:items-center"
+                  className="grid gap-2 rounded-xl px-2 py-2.5 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_auto] sm:items-center"
                 >
                   <div className="min-w-0">
-                    <p className="truncate font-mono text-sm text-ink">
+                    <p className="truncate text-sm font-medium text-ink">
                       {server.name}
                       {server.isDefault ? (
                         <span className="ml-2 text-xs font-medium text-info">по умолчанию</span>
@@ -121,85 +121,31 @@ export function DashboardView() {
               ))}
             </ul>
           )}
-          <dl className="grid grid-cols-3 border-t border-line">
-            <Count label="В сети" value={online} tone="ok" />
-            <Count label="Нестабильны" value={degraded} tone="warn" />
-            <Count label="Не в сети" value={offline} tone="bad" />
-          </dl>
-        </section>
-
-        <section className="glass overflow-hidden xl:col-span-2">
-          <div className="border-b border-line px-5 py-3">
-            <h2 className="text-sm font-medium text-ink">Трафик узлов</h2>
-          </div>
-          <div className="px-5 py-4">
-            <p className="text-sm text-muted">
-              Сумма примерных счётчиков. Опрос серверов не выполняется.
-            </p>
-            <dl className="mt-3 grid grid-cols-2 gap-3">
-              <Mini label="RX" value={formatBytes(received)} />
-              <Mini label="TX" value={formatBytes(sent)} />
-            </dl>
-            {servers.length === 0 ? (
-              <p className="mt-4 text-sm text-muted">Нет данных для сравнения.</p>
-            ) : (
-              <ul className="mt-4 space-y-3">
-                {servers.map((server) => {
-                  const total = server.rxBytes + server.txBytes;
-                  const width =
-                    total === 0 ? 0 : Math.max(4, Math.round((total / peak) * 100));
-                  return (
-                    <li key={server.id}>
-                      <div className="mb-1 flex items-center justify-between gap-3 font-mono text-xs">
-                        <span className="truncate text-ink">{server.name}</span>
-                        <span className="shrink-0 text-muted tabular-nums">
-                          {formatBytes(total)}
-                        </span>
-                      </div>
-                      <div className="h-1.5 overflow-hidden rounded-full bg-inset">
-                        <div
-                          className={cx(
-                            "h-full rounded-full",
-                            server.status === "online"
-                              ? "bg-accent"
-                              : server.status === "degraded"
-                                ? "bg-warn"
-                                : "bg-muted",
-                          )}
-                          style={{ width: `${width}%` }}
-                        />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
         </section>
       </div>
 
-      <section className="glass overflow-hidden">
+      <section className="glass px-3 py-3">
         <SectionTitle href="/configurations" action="Все конфигурации">
           Конфигурации
         </SectionTitle>
         {configurations.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-muted">
+          <p className="px-2 py-6 text-sm text-muted">
             Конфигураций в демонстрационном списке нет.
           </p>
         ) : (
-          <ul>
+          <ul className="space-y-1">
             {configurations.map((config) => {
               const server = servers.find((item) => item.id === config.serverId);
               return (
                 <li
                   key={config.id}
-                  className="grid gap-2 border-b border-line px-4 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto] sm:items-center"
+                  className="grid gap-2 rounded-xl px-2 py-2.5 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto] sm:items-center"
                 >
                   <p className="truncate font-medium text-ink">{config.name}</p>
-                  <p className="truncate font-mono text-xs text-muted">
+                  <p className="truncate text-sm text-muted">
                     {server ? server.name : "сервер удалён"}
                   </p>
-                  <p className="font-mono text-xs text-muted tabular-nums">
+                  <p className="text-sm text-muted tabular-nums">
                     {formatBytes(config.rxBytes + config.txBytes)}
                   </p>
                   <StatusBadge status={config.status} />
@@ -213,44 +159,95 @@ export function DashboardView() {
   );
 }
 
+const CHART_DAYS = 30;
+
+function demoDaily(total: number): number[] {
+  const weights = Array.from({ length: CHART_DAYS }, (_, day) => {
+    const wave = 0.62 + 0.28 * Math.sin(day / 3.4 + 0.6) + 0.12 * Math.sin(day / 1.35);
+    const trend = 0.72 + day / CHART_DAYS;
+    return Math.max(0.18, wave * trend);
+  });
+  const sum = weights.reduce((acc, weight) => acc + weight, 0);
+  if (total <= 0 || sum === 0) return weights.map(() => 0);
+  return weights.map((weight) => (total * weight) / sum);
+}
+
+function TrafficChart({ series }: { series: number[] }) {
+  const width = 640;
+  const height = 180;
+  const padX = 8;
+  const padY = 16;
+  const max = Math.max(...series, 1);
+  const step = (width - padX * 2) / (series.length - 1);
+  const points = series.map((value, index) => {
+    const x = Math.round(padX + index * step);
+    const y = Math.round(padY + (1 - value / max) * (height - padY * 2));
+    return [x, y] as const;
+  });
+  const line = points.map(([x, y]) => `${x},${y}`).join(" ");
+  const area = `${padX},${height - 6} ${line} ${width - padX},${height - 6}`;
+
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="mt-4 h-48 w-full"
+      role="img"
+      aria-label="Демонстрационный график трафика за 30 дней"
+    >
+      <defs>
+        <linearGradient id="traffic-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.45" />
+          <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {[0.25, 0.5, 0.75].map((mark) => (
+        <line
+          key={mark}
+          x1={padX}
+          x2={width - padX}
+          y1={padY + (1 - mark) * (height - padY * 2)}
+          y2={padY + (1 - mark) * (height - padY * 2)}
+          stroke="var(--line)"
+          strokeDasharray="3 6"
+        />
+      ))}
+      <polygon points={area} fill="url(#traffic-fill)" />
+      <polyline
+        points={line}
+        fill="none"
+        stroke="var(--accent)"
+        strokeWidth="2.5"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function Stat({
-  index,
   label,
   value,
   hint,
-  tone = "ink",
-  meter,
+  wash,
 }: {
-  index: string;
   label: string;
   value: ReactNode;
   hint: string;
-  tone?: "ink" | "ok" | "warn" | "bad";
-  meter?: number;
+  wash: string;
 }) {
-  const toneClass = {
-    ink: "text-ink",
-    ok: "text-ok",
-    warn: "text-warn",
-    bad: "text-bad",
-  }[tone];
-
   return (
-    <article className="glass px-5 py-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-muted">{label}</p>
-        <span className="text-xs font-medium text-accent">{index}</span>
-      </div>
-      <p className={cx("mt-2 text-3xl font-semibold tracking-tight text-ink tabular-nums", toneClass)}>
+    <article className="glass relative overflow-hidden px-5 py-5">
+      <div
+        className={cx(
+          "pointer-events-none absolute -top-12 -right-8 h-32 w-32 rounded-full blur-2xl",
+          wash,
+        )}
+      />
+      <p className="relative text-sm text-muted">{label}</p>
+      <p className="relative mt-3 text-4xl font-semibold tracking-tight text-ink tabular-nums">
         {value}
       </p>
-      <p className="mt-1 text-xs text-muted">{hint}</p>
-      {meter !== undefined ? (
-        <div className="mt-3 flex h-1.5 overflow-hidden rounded-full bg-inset">
-          <div className="bg-accent" style={{ width: `${meter}%` }} />
-          <div className="bg-info" style={{ width: `${100 - meter}%` }} />
-        </div>
-      ) : null}
+      <p className="relative mt-2 text-sm text-muted">{hint}</p>
     </article>
   );
 }
@@ -265,43 +262,11 @@ function SectionTitle({
   children: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3">
+    <div className="flex items-center justify-between gap-3 px-2 py-2">
       <h2 className="text-sm font-medium text-ink">{children}</h2>
       <Link href={href} className="text-sm font-medium text-accent hover:text-ink">
         {action}
       </Link>
-    </div>
-  );
-}
-
-function Count({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: "ok" | "warn" | "bad";
-}) {
-  const toneClass = {
-    ok: "text-ok",
-    warn: "text-warn",
-    bad: "text-bad",
-  }[tone];
-
-  return (
-    <div className="border-r border-line px-4 py-3 last:border-r-0">
-      <dt className="text-xs text-muted">{label}</dt>
-      <dd className={cx("mt-1 text-lg font-semibold tabular-nums", toneClass)}>{value}</dd>
-    </div>
-  );
-}
-
-function Mini({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl bg-inset px-3 py-2">
-      <dt className="text-xs text-muted">{label}</dt>
-      <dd className="mt-1 text-sm font-medium text-ink tabular-nums">{value}</dd>
     </div>
   );
 }
