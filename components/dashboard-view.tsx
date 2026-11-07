@@ -26,17 +26,15 @@ export function DashboardView() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="border border-line bg-panel px-4 py-3">
-        <p className="font-mono text-[10px] tracking-[0.18em] text-accent uppercase">
-          dashboard
-        </p>
-        <h1 className="mt-1 text-xl font-semibold tracking-tight text-ink">Обзор</h1>
+      <div className="glass px-5 py-4">
+        <p className="text-xs font-medium text-accent">WireGuard</p>
+        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-ink">Обзор</h1>
         <p className="mt-1 text-sm text-muted">
           Сводка по узлам WireGuard, конфигурациям и примерному трафику.
         </p>
       </div>
 
-      <section className="grid grid-cols-1 gap-px border border-line bg-line sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat
           index="01"
           label="Серверы"
@@ -91,7 +89,7 @@ export function DashboardView() {
       </section>
 
       <div className="grid gap-4 xl:grid-cols-5">
-        <section className="border border-line bg-panel xl:col-span-3">
+        <section className="glass overflow-hidden xl:col-span-3">
           <SectionTitle href="/servers" action="Все серверы">
             Узлы
           </SectionTitle>
@@ -110,9 +108,7 @@ export function DashboardView() {
                     <p className="truncate font-mono text-sm text-ink">
                       {server.name}
                       {server.isDefault ? (
-                        <span className="ml-2 text-[10px] tracking-[0.12em] text-info uppercase">
-                          default
-                        </span>
+                        <span className="ml-2 text-xs font-medium text-info">по умолчанию</span>
                       ) : null}
                     </p>
                     <p className="mt-0.5 truncate text-xs text-muted">{server.location}</p>
@@ -132,17 +128,15 @@ export function DashboardView() {
           </dl>
         </section>
 
-        <section className="border border-line bg-panel xl:col-span-2">
-          <div className="border-b border-line px-4 py-2">
-            <h2 className="font-mono text-[11px] tracking-[0.16em] text-muted uppercase">
-              Трафик узлов
-            </h2>
+        <section className="glass overflow-hidden xl:col-span-2">
+          <div className="border-b border-line px-5 py-3">
+            <h2 className="text-sm font-medium text-ink">Трафик узлов</h2>
           </div>
-          <div className="px-4 py-3">
+          <div className="px-5 py-4">
             <p className="text-sm text-muted">
               Сумма примерных счётчиков. Опрос серверов не выполняется.
             </p>
-            <dl className="mt-3 grid grid-cols-2 gap-px bg-line">
+            <dl className="mt-3 grid grid-cols-2 gap-3">
               <Mini label="RX" value={formatBytes(received)} />
               <Mini label="TX" value={formatBytes(sent)} />
             </dl>
@@ -162,10 +156,10 @@ export function DashboardView() {
                           {formatBytes(total)}
                         </span>
                       </div>
-                      <div className="h-1.5 bg-inset">
+                      <div className="h-1.5 overflow-hidden rounded-full bg-inset">
                         <div
                           className={cx(
-                            "h-full",
+                            "h-full rounded-full",
                             server.status === "online"
                               ? "bg-accent"
                               : server.status === "degraded"
@@ -184,7 +178,7 @@ export function DashboardView() {
         </section>
       </div>
 
-      <section className="border border-line bg-panel">
+      <section className="glass overflow-hidden">
         <SectionTitle href="/configurations" action="Все конфигурации">
           Конфигурации
         </SectionTitle>
@@ -242,19 +236,17 @@ function Stat({
   }[tone];
 
   return (
-    <article className="bg-panel px-4 py-3">
+    <article className="glass px-5 py-4">
       <div className="flex items-center justify-between gap-3">
-        <p className="font-mono text-[10px] tracking-[0.16em] text-muted uppercase">
-          {label}
-        </p>
-        <span className="font-mono text-[10px] text-accent">{index}</span>
+        <p className="text-sm text-muted">{label}</p>
+        <span className="text-xs font-medium text-accent">{index}</span>
       </div>
-      <p className={cx("mt-2 font-mono text-2xl text-ink tabular-nums", toneClass)}>
+      <p className={cx("mt-2 text-3xl font-semibold tracking-tight text-ink tabular-nums", toneClass)}>
         {value}
       </p>
       <p className="mt-1 text-xs text-muted">{hint}</p>
       {meter !== undefined ? (
-        <div className="mt-2 flex h-1 bg-inset">
+        <div className="mt-3 flex h-1.5 overflow-hidden rounded-full bg-inset">
           <div className="bg-accent" style={{ width: `${meter}%` }} />
           <div className="bg-info" style={{ width: `${100 - meter}%` }} />
         </div>
@@ -273,14 +265,9 @@ function SectionTitle({
   children: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-2">
-      <h2 className="font-mono text-[11px] tracking-[0.16em] text-muted uppercase">
-        {children}
-      </h2>
-      <Link
-        href={href}
-        className="font-mono text-[11px] tracking-[0.12em] text-accent uppercase hover:text-ink"
-      >
+    <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3">
+      <h2 className="text-sm font-medium text-ink">{children}</h2>
+      <Link href={href} className="text-sm font-medium text-accent hover:text-ink">
         {action}
       </Link>
     </div>
@@ -304,21 +291,17 @@ function Count({
 
   return (
     <div className="border-r border-line px-4 py-3 last:border-r-0">
-      <dt className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
-        {label}
-      </dt>
-      <dd className={cx("mt-1 font-mono text-lg tabular-nums", toneClass)}>{value}</dd>
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className={cx("mt-1 text-lg font-semibold tabular-nums", toneClass)}>{value}</dd>
     </div>
   );
 }
 
 function Mini({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-inset px-3 py-2">
-      <dt className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
-        {label}
-      </dt>
-      <dd className="mt-1 font-mono text-sm text-ink tabular-nums">{value}</dd>
+    <div className="rounded-xl bg-inset px-3 py-2">
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="mt-1 text-sm font-medium text-ink tabular-nums">{value}</dd>
     </div>
   );
 }

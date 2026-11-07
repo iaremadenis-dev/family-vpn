@@ -254,7 +254,7 @@ export function DemoProvider({ children }: { children: ReactNode }) {
         <div className="pointer-events-none fixed inset-x-0 bottom-20 z-50 flex justify-center px-4 md:bottom-6">
           <div
             role="status"
-            className="pointer-events-auto flex w-full max-w-md items-start gap-3 border border-line border-l-accent bg-panel px-3 py-2.5 text-sm text-ink"
+            className="glass pointer-events-auto flex w-full max-w-md items-start gap-3 px-4 py-3 text-sm text-ink"
           >
             <p className="flex-1">{notice}</p>
             <button

@@ -47,7 +47,7 @@ export function ServersView() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="nodes"
+        kicker="Инфраструктура"
         title="Серверы"
         description="Один сервер обслуживает много конфигураций. Каждая конфигурация привязана только к одному серверу."
         action={
@@ -64,11 +64,11 @@ export function ServersView() {
           text="Добавьте запись в демонстрационный список. Реальный VPS при этом не создаётся."
         />
       ) : (
-        <div className="border border-line bg-panel">
+        <div className="glass overflow-hidden">
           <div
             className={cx(
               serverGrid,
-              "hidden border-b border-line bg-inset px-4 py-2 font-mono text-[10px] tracking-[0.14em] text-muted uppercase md:grid",
+              "hidden border-b border-line bg-inset px-4 py-3 text-xs font-medium text-muted md:grid",
             )}
           >
             <span>Узел</span>
@@ -92,9 +92,7 @@ export function ServersView() {
                   <Cell label="Узел">
                     <p className="truncate font-mono text-sm text-ink">{server.name}</p>
                     {server.isDefault ? (
-                      <p className="mt-1 font-mono text-[10px] tracking-[0.12em] text-info uppercase">
-                        по умолчанию
-                      </p>
+                      <p className="mt-1 text-xs font-medium text-info">по умолчанию</p>
                     ) : null}
                   </Cell>
                   <Cell label="Локация">
@@ -119,10 +117,10 @@ export function ServersView() {
                     <p className="font-mono text-sm text-ink tabular-nums">
                       {formatBytes(total)}
                     </p>
-                    <div className="mt-1.5 h-1 bg-inset">
+                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-inset">
                       <div
                         className={cx(
-                          "h-full",
+                          "h-full rounded-full",
                           server.status === "offline" ? "bg-muted" : "bg-accent",
                         )}
                         style={{ width: `${share}%` }}
@@ -240,7 +238,7 @@ export function ServersView() {
 function Cell({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0">
-      <p className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase md:hidden">
+      <p className="text-xs text-muted md:hidden">
         {label}
       </p>
       <div className="mt-0.5 md:mt-0">{children}</div>
@@ -333,10 +331,8 @@ function Info({
   mono?: boolean;
 }) {
   return (
-    <div className="bg-inset px-3 py-2">
-      <dt className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
-        {label}
-      </dt>
+    <div className="rounded-xl bg-inset px-3 py-2">
+      <dt className="text-xs text-muted">{label}</dt>
       <dd className={mono ? "mt-1 font-mono text-sm text-ink" : "mt-1 font-medium text-ink"}>
         {value}
       </dd>

@@ -16,44 +16,39 @@ const navItems: Array<{
   href: string;
   label: string;
   short: string;
-  code: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
 }> = [
-  { href: "/", label: "Обзор", short: "Обзор", code: "01", icon: IconOverview },
-  { href: "/servers", label: "Серверы", short: "Серверы", code: "02", icon: IconServer },
+  { href: "/", label: "Обзор", short: "Обзор", icon: IconOverview },
+  { href: "/servers", label: "Серверы", short: "Серверы", icon: IconServer },
   {
     href: "/configurations",
     label: "Конфигурации",
     short: "Конфиги",
-    code: "03",
     icon: IconConfig,
   },
   {
     href: "/settings",
     label: "Настройки",
     short: "Настройки",
-    code: "04",
     icon: IconSettings,
   },
 ];
 
-const sections: Record<string, { code: string; title: string }> = {
-  "/": { code: "DASH", title: "Обзор" },
-  "/servers": { code: "NODES", title: "Серверы" },
-  "/configurations": { code: "PEERS", title: "Конфигурации" },
-  "/settings": { code: "SYS", title: "Настройки" },
+const sections: Record<string, string> = {
+  "/": "Обзор",
+  "/servers": "Серверы",
+  "/configurations": "Конфигурации",
+  "/settings": "Настройки",
 };
 
 function NavLink({
   href,
   label,
-  code,
   icon: Icon,
   compact = false,
 }: {
   href: string;
   label: string;
-  code: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   compact?: boolean;
 }) {
@@ -67,17 +62,14 @@ function NavLink({
       className={cx(
         "transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
         compact
-          ? "flex flex-col items-center gap-1 border-t-2 px-1 py-2 text-[10px] tracking-wide uppercase"
-          : "flex items-center gap-2.5 border-l-2 px-3 py-2 text-[13px]",
+          ? "flex flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px]"
+          : "flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm",
         active
-          ? "border-accent bg-inset text-ink"
-          : "border-transparent text-muted hover:bg-inset hover:text-ink",
+          ? "bg-accent/15 text-ink shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_45%,transparent)]"
+          : "text-muted hover:bg-inset hover:text-ink",
       )}
     >
-      {compact ? null : (
-        <span className="w-4 font-mono text-[10px] text-muted">{code}</span>
-      )}
-      <Icon className="h-4 w-4 shrink-0" />
+      <Icon className={cx("h-4 w-4 shrink-0", active && "text-accent")} />
       {label}
     </Link>
   );
@@ -87,8 +79,8 @@ function Mark({ compact = false }: { compact?: boolean }) {
   return (
     <span
       className={cx(
-        "grid place-items-center border border-accent bg-accent/10 font-mono font-semibold text-accent",
-        compact ? "h-7 w-7 text-[10px]" : "h-8 w-8 text-xs",
+        "grid place-items-center rounded-xl bg-accent font-semibold text-accent-ink shadow-[0_8px_22px_color-mix(in_srgb,var(--accent)_35%,transparent)]",
+        compact ? "h-8 w-8 text-[11px]" : "h-9 w-9 text-xs",
       )}
     >
       FV
@@ -99,89 +91,78 @@ function Mark({ compact = false }: { compact?: boolean }) {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { adminName, servers, configurations } = useDemo();
-  const section = sections[pathname] ?? { code: "NAV", title: "Family VPN" };
+  const title = sections[pathname] ?? "Family VPN";
   const online = servers.filter((server) => server.status === "online").length;
+  const allOnline = servers.length > 0 && online === servers.length;
 
   return (
-    <div className="min-h-dvh md:pl-52">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-52 flex-col border-r border-line bg-panel md:flex">
-        <div className="flex items-center gap-2.5 border-b border-line px-3 py-3">
+    <div className="min-h-dvh md:pl-[16.75rem]">
+      <aside className="glass fixed top-3 bottom-3 left-3 z-30 hidden w-56 flex-col md:flex">
+        <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">
           <Mark />
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold tracking-tight text-ink">
               Family VPN
             </span>
-            <span className="block font-mono text-[10px] tracking-[0.16em] text-muted uppercase">
-              wg control
-            </span>
+            <span className="block text-xs text-muted">WireGuard</span>
           </span>
         </div>
-        <nav className="flex flex-1 flex-col py-2" aria-label="Разделы">
+        <nav className="flex flex-1 flex-col gap-1 px-2" aria-label="Разделы">
           {navItems.map((item) => (
             <NavLink key={item.href} {...item} />
           ))}
         </nav>
-        <div className="border-t border-line px-3 py-3">
-          <p className="font-mono text-[10px] tracking-[0.16em] text-muted uppercase">
-            operator
-          </p>
-          <p className="mt-1 truncate text-sm text-ink">{adminName}</p>
-          <p className="mt-0.5 font-mono text-[10px] text-muted">local session</p>
+        <div className="m-2 rounded-2xl bg-inset px-3 py-3">
+          <p className="truncate text-sm font-medium text-ink">{adminName}</p>
+          <p className="mt-0.5 text-xs text-muted">Локальная сессия</p>
         </div>
       </aside>
 
-      <div className="flex min-h-dvh flex-col">
-        <header className="sticky top-0 z-20 flex h-12 items-center justify-between gap-3 border-b border-t-2 border-line border-t-accent bg-panel px-3 md:px-5">
+      <div className="flex flex-col gap-4 px-3 py-3 pb-28 md:px-5 md:py-4 md:pb-6">
+        <header className="glass sticky top-3 z-20 flex h-14 items-center justify-between gap-3 px-3 md:px-4">
           <div className="flex min-w-0 items-center gap-2.5">
             <span className="md:hidden">
               <Mark compact />
             </span>
-            <p className="truncate font-mono text-[11px] tracking-[0.14em] text-muted uppercase">
-              <span className="text-accent">{section.code}</span>
-              <span className="px-1.5 text-line">/</span>
-              <span className="text-ink">{section.title}</span>
-            </p>
+            <p className="truncate text-sm font-semibold text-ink">{title}</p>
           </div>
-          <div className="flex shrink-0 items-center gap-2 font-mono text-[10px] tracking-[0.12em] uppercase">
-            <span className="hidden border border-line bg-canvas px-1.5 py-1 text-muted sm:inline">
+          <div className="flex shrink-0 items-center gap-2 text-xs">
+            <span
+              className={cx(
+                "hidden rounded-full px-2.5 py-1 sm:inline",
+                allOnline ? "bg-ok/15 text-ok" : "bg-inset text-muted",
+              )}
+            >
               <span className={online > 0 ? "text-ok" : "text-bad"}>{online}</span>
-              <span>/{servers.length} nodes</span>
+              <span> из {servers.length} в сети</span>
             </span>
-            <span className="hidden border border-line bg-canvas px-1.5 py-1 text-muted md:inline">
-              {configurations.length} cfg
+            <span className="hidden rounded-full bg-inset px-2.5 py-1 text-muted md:inline">
+              {configurations.length} конфиг.
             </span>
-            <span className="border border-warn/50 px-1.5 py-1 text-warn">demo</span>
+            <span className="rounded-full bg-warn/15 px-2.5 py-1 font-medium text-warn">
+              Демо
+            </span>
           </div>
         </header>
 
-        <div className="flex flex-1 flex-col gap-4 px-3 py-4 pb-24 md:px-5 md:pb-6">
-          <p className="flex flex-col gap-1 border border-line bg-panel px-3 py-2 text-xs text-muted sm:flex-row sm:items-baseline sm:gap-3">
-            <span className="font-mono text-[10px] tracking-[0.16em] text-warn uppercase">
-              sys / demo
-            </span>
-            <span>
-              Цифры и списки — пример. Кнопки не обращаются к VPS и WireGuard: ключи
-              и файлы .conf не создаются, изменения не сохраняются.
-            </span>
-          </p>
-          {children}
-        </div>
+        <p className="glass flex flex-col gap-1 px-4 py-3 text-sm text-muted sm:flex-row sm:items-baseline sm:gap-3">
+          <span className="text-xs font-medium text-warn">Демонстрация</span>
+          <span>
+            Цифры и списки — пример. Кнопки не обращаются к VPS и WireGuard: ключи и
+            файлы .conf не создаются, изменения не сохраняются.
+          </span>
+        </p>
+        {children}
       </div>
 
       <nav
-        className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-panel pb-[env(safe-area-inset-bottom)] md:hidden"
+        className="glass fixed inset-x-3 bottom-3 z-30 pb-[env(safe-area-inset-bottom)] md:hidden"
         aria-label="Разделы"
       >
-        <ul className="grid grid-cols-4">
+        <ul className="grid grid-cols-4 px-1 py-1">
           {navItems.map((item) => (
             <li key={item.href}>
-              <NavLink
-                href={item.href}
-                label={item.short}
-                code={item.code}
-                icon={item.icon}
-                compact
-              />
+              <NavLink href={item.href} label={item.short} icon={item.icon} compact />
             </li>
           ))}
         </ul>

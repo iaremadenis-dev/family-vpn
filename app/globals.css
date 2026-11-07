@@ -21,34 +21,38 @@
 
 :root {
   color-scheme: light;
-  --canvas: #e4edf3;
-  --panel: #f5f9fb;
-  --inset: #d5e2eb;
-  --line: #b4c5d2;
-  --ink: #0b1622;
-  --muted: #4e6172;
-  --accent: #0e7490;
-  --accent-ink: #f4fdff;
-  --ok: #047857;
-  --warn: #b45309;
-  --bad: #be123c;
-  --info: #1d4ed8;
+  --canvas: #e5eef6;
+  --panel: rgba(255, 255, 255, 0.66);
+  --inset: rgba(18, 52, 86, 0.06);
+  --line: rgba(22, 52, 84, 0.12);
+  --ink: #102033;
+  --muted: #52667c;
+  --accent: #0b78b4;
+  --accent-ink: #f5fbff;
+  --ok: #0d8a68;
+  --warn: #a86b08;
+  --bad: #c43d58;
+  --info: #2d62c8;
+  --glow-a: rgba(70, 150, 220, 0.28);
+  --glow-b: rgba(120, 170, 230, 0.2);
 }
 
 html.dark {
   color-scheme: dark;
-  --canvas: #070c12;
-  --panel: #0e1621;
-  --inset: #162232;
-  --line: #243648;
-  --ink: #e7eef6;
-  --muted: #8ea3b8;
-  --accent: #22d3ee;
-  --accent-ink: #04252c;
-  --ok: #34d399;
-  --warn: #fbbf24;
-  --bad: #fb7185;
-  --info: #60a5fa;
+  --canvas: #07111c;
+  --panel: rgba(16, 34, 58, 0.58);
+  --inset: rgba(255, 255, 255, 0.045);
+  --line: rgba(190, 220, 255, 0.14);
+  --ink: #f3f7fc;
+  --muted: #a8bdd2;
+  --accent: #7ec8ff;
+  --accent-ink: #062033;
+  --ok: #6ddec0;
+  --warn: #f0c56a;
+  --bad: #ff8ea3;
+  --info: #9db7ff;
+  --glow-a: rgba(48, 120, 200, 0.22);
+  --glow-b: rgba(70, 110, 190, 0.16);
 }
 
 html {
@@ -59,12 +63,24 @@ body {
   font-family: var(--font-sans), "Segoe UI", sans-serif;
   background-color: var(--canvas);
   background-image:
-    linear-gradient(to right, color-mix(in srgb, var(--line) 42%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom, color-mix(in srgb, var(--line) 42%, transparent) 1px, transparent 1px);
-  background-size: 28px 28px;
+    radial-gradient(980px 560px at 0% -10%, var(--glow-a), transparent 62%),
+    radial-gradient(820px 520px at 100% 0%, var(--glow-b), transparent 58%),
+    radial-gradient(700px 460px at 70% 110%, var(--glow-b), transparent 60%);
+  background-attachment: fixed;
+}
+
+.glass {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 1.15rem;
+  box-shadow:
+    0 18px 50px rgba(4, 12, 28, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
   color: var(--ink);
 }

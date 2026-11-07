@@ -27,14 +27,14 @@ export function SettingsView() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="system"
+        kicker="Система"
         title="Настройки"
         description="Одна учётная запись администратора, тема оформления и общие параметры системы."
       />
 
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="flex flex-col gap-4">
-          <section className="border border-line bg-panel">
+          <section className="glass overflow-hidden">
             <SectionHeading code="OP">Администратор</SectionHeading>
             <div className="px-4 py-4">
               <p className="text-sm text-muted">
@@ -75,24 +75,24 @@ export function SettingsView() {
             </div>
           </section>
 
-          <section className="border border-line bg-panel">
+          <section className="glass overflow-hidden">
             <SectionHeading code="UI">Тема</SectionHeading>
             <div className="px-4 py-4">
               <p className="text-sm text-muted">
                 Светлая и тёмная темы применяются сразу и запоминаются в этом браузере.
                 На сервер ничего не отправляется.
               </p>
-              <div className="mt-4 grid gap-px bg-line sm:grid-cols-2">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <ThemeChoice
                   label="Светлая"
-                  text="Светлое поле, те же контуры панелей."
+                  text="Светлое стекло на холодном фоне."
                   selected={theme === "light"}
                   mode="light"
                   onSelect={() => setTheme("light")}
                 />
                 <ThemeChoice
                   label="Тёмная"
-                  text="Основной режим панели управления."
+                  text="Основной тёмный режим панели."
                   selected={theme === "dark"}
                   mode="dark"
                   onSelect={() => setTheme("dark")}
@@ -102,7 +102,7 @@ export function SettingsView() {
           </section>
         </div>
 
-        <section className="border border-line bg-panel">
+        <section className="glass overflow-hidden">
           <SectionHeading code="CFG">Система</SectionHeading>
           <dl>
             {systemRows.map(([label, value]) => (
@@ -110,7 +110,7 @@ export function SettingsView() {
                 key={label}
                 className="grid gap-1 border-b border-line px-4 py-3 sm:grid-cols-[11rem_minmax(0,1fr)] sm:items-baseline"
               >
-                <dt className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
+                <dt className="text-sm text-muted">
                   {label}
                 </dt>
                 <dd className="text-sm text-ink">{value}</dd>
@@ -162,11 +162,9 @@ export function SettingsView() {
 
 function SectionHeading({ code, children }: { code: string; children: string }) {
   return (
-    <div className="flex items-center justify-between border-b border-line px-4 py-2">
-      <h2 className="font-mono text-[11px] tracking-[0.16em] text-muted uppercase">
-        {children}
-      </h2>
-      <span className="font-mono text-[10px] text-accent">{code}</span>
+    <div className="flex items-center justify-between border-b border-line px-5 py-3">
+      <h2 className="text-sm font-medium text-ink">{children}</h2>
+      <span className="text-xs font-medium text-accent">{code}</span>
     </div>
   );
 }
@@ -190,25 +188,23 @@ function ThemeChoice({
       onClick={onSelect}
       aria-pressed={selected}
       className={cx(
-        "bg-panel p-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-        selected ? "bg-inset" : "hover:bg-inset",
+        "rounded-2xl border p-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+        selected ? "border-accent/50 bg-accent/10" : "border-line bg-inset hover:border-accent/30",
       )}
     >
       <span
-        className="mb-3 block h-10 border border-line"
+        className="mb-3 block h-12 rounded-xl"
         style={{
           background:
             mode === "dark"
-              ? "linear-gradient(90deg, #0e1621 0 70%, #22d3ee 70% 100%)"
-              : "linear-gradient(90deg, #f5f9fb 0 70%, #0e7490 70% 100%)",
+              ? "linear-gradient(120deg, #07111c 0%, #16345a 62%, #7ec8ff 100%)"
+              : "linear-gradient(120deg, #f7fbff 0%, #d5e6f5 62%, #0b78b4 100%)",
         }}
         data-theme-preview={mode}
       />
       <span className="flex items-center justify-between gap-2">
         <span className="font-medium text-ink">{label}</span>
-        <span className="font-mono text-[10px] tracking-[0.14em] text-accent uppercase">
-          {selected ? "active" : mode}
-        </span>
+        <span className="text-xs font-medium text-accent">{selected ? "выбрана" : ""}</span>
       </span>
       <span className="mt-1 block text-sm text-muted">{text}</span>
     </button>

@@ -43,14 +43,12 @@ export function ConfigurationsView() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        kicker="peers"
+        kicker="Доступ"
         title="Конфигурации"
         description="Администратор создаёт конфигурации вручную. У каждой конфигурации один VPN-сервер."
         action={
           servers.length === 0 ? (
-            <p className="font-mono text-xs tracking-[0.12em] text-muted uppercase">
-              Сначала добавьте VPN-сервер.
-            </p>
+            <p className="text-sm text-muted">Сначала добавьте VPN-сервер.</p>
           ) : (
             <Button onClick={() => setDialog({ type: "create" })}>
               Создать конфигурацию
@@ -66,11 +64,11 @@ export function ConfigurationsView() {
           text="Новая запись появится только в этом списке. Файл .conf и QR-код не формируются."
         />
       ) : (
-        <div className="border border-line bg-panel">
+        <div className="glass overflow-hidden">
           <div
             className={cx(
               configGrid,
-              "hidden border-b border-line bg-inset px-4 py-2 font-mono text-[10px] tracking-[0.14em] text-muted uppercase md:grid",
+              "hidden border-b border-line bg-inset px-4 py-3 text-xs font-medium text-muted md:grid",
             )}
           >
             <span>Конфигурация</span>
@@ -122,9 +120,7 @@ export function ConfigurationsView() {
                   </Cell>
                 </div>
                 <div className="flex flex-col gap-2 border-t border-line bg-inset/60 px-4 py-2 lg:flex-row lg:items-center lg:justify-between">
-                  <p className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
-                    export
-                  </p>
+                  <p className="text-xs font-medium text-muted">Экспорт</p>
                   <div className="flex flex-wrap gap-1.5">
                     <Button
                       size="sm"
@@ -248,7 +244,7 @@ export function ConfigurationsView() {
 function Cell({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0">
-      <p className="font-mono text-[10px] tracking-[0.14em] text-muted uppercase md:hidden">
+      <p className="text-xs text-muted md:hidden">
         {label}
       </p>
       <div className="mt-0.5 md:mt-0">{children}</div>
@@ -301,18 +297,16 @@ function ArtifactNotice({
         не строится.
       </DemoNote>
       {artifact === "qr" ? (
-        <div className="mx-auto grid h-44 w-44 place-items-center border border-dashed border-line bg-canvas p-4 text-center">
+        <div className="mx-auto grid h-44 w-44 place-items-center rounded-2xl border border-dashed border-line bg-inset p-4 text-center">
           <div>
-            <p className="font-mono text-[10px] tracking-[0.16em] text-accent uppercase">
-              qr slot
-            </p>
+            <p className="text-xs font-medium text-accent">QR</p>
             <p className="mt-2 text-sm text-muted">
               QR-код появится после подключения генерации
             </p>
           </div>
         </div>
       ) : (
-        <p className="border border-line bg-canvas px-3 py-2 font-mono text-sm text-muted">
+        <p className="rounded-xl bg-inset px-3 py-2 font-mono text-sm text-muted">
           {name}.conf — файл не создан
         </p>
       )}

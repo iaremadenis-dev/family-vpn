@@ -3,15 +3,16 @@
 import { useEffect, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cx } from "@/lib/cx";
 
-export const panelClass = "border border-line bg-panel text-ink";
+export const panelClass = "glass text-ink";
 
 export const inputClass =
-  "h-9 w-full border border-line bg-canvas px-3 font-mono text-sm text-ink outline-none transition-colors placeholder:text-muted focus:border-accent";
+  "h-10 w-full rounded-xl border border-line bg-inset px-3 text-sm text-ink outline-none transition-colors placeholder:text-muted focus:border-accent";
 
 const buttonStyles = {
-  primary: "bg-accent text-accent-ink hover:brightness-110",
-  secondary: "border border-line bg-panel text-ink hover:border-accent hover:text-accent",
-  danger: "border border-bad/40 bg-panel text-bad hover:bg-bad/10",
+  primary:
+    "bg-accent text-accent-ink shadow-[0_8px_24px_color-mix(in_srgb,var(--accent)_32%,transparent)] hover:brightness-110",
+  secondary: "border border-line bg-inset text-ink hover:border-accent/60 hover:text-accent",
+  danger: "border border-bad/30 bg-bad/10 text-bad hover:bg-bad/15",
   ghost: "text-muted hover:bg-inset hover:text-ink",
 } as const;
 
@@ -36,7 +37,7 @@ export function Button({
     <button
       type={type}
       className={cx(
-        "inline-flex items-center justify-center gap-2 font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-45",
+        "inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-45",
         buttonSizes[size],
         buttonStyles[variant],
         className,
@@ -48,15 +49,15 @@ export function Button({
 
 export function DemoChip() {
   return (
-    <span className="border border-warn/50 px-1 font-mono text-[9px] tracking-[0.14em] text-warn uppercase">
-      demo
+    <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
+      демо
     </span>
   );
 }
 
 export function DemoNote({ children }: { children: ReactNode }) {
   return (
-    <p className="border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-ink">
+    <p className="rounded-xl bg-warn/10 px-3 py-2 text-sm text-ink">
       {children}
     </p>
   );
@@ -68,6 +69,14 @@ const ledStyles = {
   offline: "bg-muted",
   active: "bg-ok",
   revoked: "bg-bad",
+} as const;
+
+const badgeStyles = {
+  online: "bg-ok/15 text-ok",
+  degraded: "bg-warn/15 text-warn",
+  offline: "bg-inset text-muted",
+  active: "bg-ok/15 text-ok",
+  revoked: "bg-bad/15 text-bad",
 } as const;
 
 const badgeLabels = {
@@ -84,8 +93,13 @@ export function StatusBadge({
   status: keyof typeof ledStyles;
 }) {
   return (
-    <span className="inline-flex items-center gap-1.5 border border-line bg-canvas px-1.5 py-0.5 font-mono text-[10px] tracking-[0.12em] text-ink uppercase">
-      <span className={cx("h-1.5 w-1.5", ledStyles[status])} />
+    <span
+      className={cx(
+        "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium",
+        badgeStyles[status],
+      )}
+    >
+      <span className={cx("h-1.5 w-1.5 rounded-full", ledStyles[status])} />
       {badgeLabels[status]}
     </span>
   );
@@ -103,11 +117,9 @@ export function PageHeader({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3 border border-line bg-panel px-4 py-3 sm:flex-row sm:items-end sm:justify-between">
+    <div className="glass flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
       <div className="max-w-3xl">
-        <p className="font-mono text-[10px] tracking-[0.18em] text-accent uppercase">
-          {kicker}
-        </p>
+        <p className="text-xs font-medium text-accent">{kicker}</p>
         <h1 className="mt-1 text-xl font-semibold tracking-tight text-ink">{title}</h1>
         <p className="mt-1 text-sm text-muted">{description}</p>
       </div>
@@ -126,8 +138,8 @@ export function EmptyState({
   text: string;
 }) {
   return (
-    <div className="border border-dashed border-line bg-panel px-5 py-10 text-center">
-      <p className="font-mono text-xs tracking-[0.14em] text-ink uppercase">{title}</p>
+    <div className="glass border-dashed px-5 py-10 text-center">
+      <p className="font-medium text-ink">{title}</p>
       <p className="mt-2 text-sm text-muted">{text}</p>
     </div>
   );
@@ -148,7 +160,7 @@ export function Field({
     <div>
       <label
         htmlFor={id}
-        className="mb-1.5 block font-mono text-[10px] tracking-[0.14em] text-muted uppercase"
+        className="mb-1.5 block text-sm font-medium text-ink"
       >
         {label}
       </label>
@@ -187,26 +199,21 @@ export function Dialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center">
-      <div className="absolute inset-0 bg-black/70" onClick={onClose} aria-hidden="true" />
+      <div className="absolute inset-0 bg-[#04101c]/70 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="dialog-title"
-        className="relative z-10 max-h-[min(90dvh,40rem)] w-full max-w-lg overflow-y-auto border border-line bg-panel p-4"
+        className="glass relative z-10 max-h-[min(90dvh,40rem)] w-full max-w-lg overflow-y-auto p-5"
       >
-        <div className="mb-4 flex items-start justify-between gap-3 border-b border-line pb-3">
-          <div>
-            <p className="font-mono text-[10px] tracking-[0.16em] text-accent uppercase">
-              local action
-            </p>
-            <h2 id="dialog-title" className="mt-1 text-base font-semibold text-ink">
-              {title}
-            </h2>
-          </div>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <h2 id="dialog-title" className="text-lg font-semibold text-ink">
+            {title}
+          </h2>
           <button
             type="button"
             onClick={onClose}
-            className="border border-line px-2 text-lg leading-none text-muted hover:border-accent hover:text-ink"
+            className="grid h-8 w-8 place-items-center rounded-full bg-inset text-lg leading-none text-muted hover:text-ink"
             aria-label="Закрыть"
           >
             ×
