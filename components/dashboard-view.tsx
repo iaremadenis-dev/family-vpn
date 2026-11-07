@@ -3,9 +3,10 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { useDemo } from "@/components/demo-provider";
-import { StatusBadge } from "@/components/ui";
+import { DeviceIcon, IconServer } from "@/components/icons";
+import { RowMark, StatusBadge, itemRowClass } from "@/components/ui";
 import { cx } from "@/lib/cx";
-import { formatBytes, formatCount } from "@/lib/format";
+import { formatBytes, formatCount, formatDateTime } from "@/lib/format";
 
 export function DashboardView() {
   const { servers, configurations } = useDemo();
@@ -89,7 +90,7 @@ export function DashboardView() {
           <TrafficChart series={series} />
         </section>
 
-        <section className="glass px-3 py-3 xl:col-span-2">
+        <section className="xl:col-span-2">
           <SectionTitle href="/servers" action="Все серверы">
             Серверы
           </SectionTitle>
@@ -98,24 +99,23 @@ export function DashboardView() {
               Серверов в демонстрационном списке нет.
             </p>
           ) : (
-            <ul className="space-y-1">
+            <ul className="flex flex-col gap-2">
               {servers.map((server) => (
-                <li
-                  key={server.id}
-                  className="grid gap-2 rounded-xl px-2 py-2.5 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_auto] sm:items-center"
-                >
-                  <div className="min-w-0">
+                <li key={server.id} className="glass flex min-h-16 items-center gap-3 px-3 py-2.5">
+                  <RowMark>
+                    <IconServer className="h-4 w-4" />
+                  </RowMark>
+                  <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-ink">
                       {server.name}
                       {server.isDefault ? (
                         <span className="ml-2 text-xs font-medium text-info">по умолчанию</span>
                       ) : null}
                     </p>
-                    <p className="mt-0.5 truncate text-xs text-muted">{server.location}</p>
+                    <p className="truncate text-xs text-muted">
+                      {server.location} · {server.endpoint}:{server.listenPort}
+                    </p>
                   </div>
-                  <p className="truncate font-mono text-xs text-muted">
-                    {server.endpoint}:{server.listenPort}
-                  </p>
                   <StatusBadge status={server.status} />
                 </li>
               ))}
@@ -124,7 +124,7 @@ export function DashboardView() {
         </section>
       </div>
 
-      <section className="glass px-3 py-3">
+      <section>
         <SectionTitle href="/configurations" action="Все конфигурации">
           Конфигурации
         </SectionTitle>
@@ -133,21 +133,30 @@ export function DashboardView() {
             Конфигураций в демонстрационном списке нет.
           </p>
         ) : (
-          <ul className="space-y-1">
+          <ul className="flex flex-col gap-2">
             {configurations.map((config) => {
               const server = servers.find((item) => item.id === config.serverId);
               return (
                 <li
                   key={config.id}
-                  className="grid gap-2 rounded-xl px-2 py-2.5 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto] sm:items-center"
+                  className={cx(
+                    itemRowClass,
+                    "sm:grid-cols-[minmax(0,1.15fr)_minmax(0,0.9fr)_minmax(0,0.7fr)_minmax(0,0.95fr)_auto]",
+                  )}
                 >
-                  <p className="truncate font-medium text-ink">{config.name}</p>
-                  <p className="truncate text-sm text-muted">
-                    {server ? server.name : "сервер удалён"}
+                  <div className="col-span-2 flex min-w-0 items-center gap-3 sm:col-span-1">
+                    <RowMark>
+                      <DeviceIcon name={config.name} className="h-4 w-4" />
+                    </RowMark>
+                    <p className="truncate text-sm font-medium text-ink">{config.name}</p>
+                  </div>
+                  <p className="truncate text-sm text-ink">
+                    {server ? server.name : "Сервер удалён"}
                   </p>
-                  <p className="text-sm text-muted tabular-nums">
+                  <p className="truncate text-sm text-ink tabular-nums">
                     {formatBytes(config.rxBytes + config.txBytes)}
                   </p>
+                  <p className="truncate text-sm text-ink">{formatDateTime(config.createdAt)}</p>
                   <StatusBadge status={config.status} />
                 </li>
               );

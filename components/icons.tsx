@@ -34,6 +34,33 @@ export function IconServer(props: IconProps) {
   );
 }
 
+export function IconDevice(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="4" y="4.5" width="16" height="11" rx="1.5" />
+      <path d="M8 19.5h8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function IconPhone(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="7.5" y="3.5" width="9" height="17" rx="2" />
+      <path d="M11 17.5h2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function IconTablet(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="5.5" y="3.5" width="13" height="17" rx="2" />
+      <path d="M11 17.5h2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function IconConfig(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -42,6 +69,13 @@ export function IconConfig(props: IconProps) {
       <path d="M9 12h6M9 16h4" strokeLinecap="round" />
     </svg>
   );
+}
+
+export function DeviceIcon({ name, ...props }: IconProps & { name: string }) {
+  const normalized = name.toLowerCase();
+  if (normalized.includes("телефон")) return <IconPhone {...props} />;
+  if (normalized.includes("планшет")) return <IconTablet {...props} />;
+  return <IconDevice {...props} />;
 }
 
 export function IconSettings(props: IconProps) {

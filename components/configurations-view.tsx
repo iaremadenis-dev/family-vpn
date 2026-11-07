@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
+import { useId, useState } from "react";
 import { useDemo } from "@/components/demo-provider";
+import { DeviceIcon } from "@/components/icons";
 import {
   Button,
   DemoChip,
@@ -10,8 +11,11 @@ import {
   EmptyState,
   Field,
   PageHeader,
+  RowMark,
   StatusBadge,
+  configRowGrid,
   inputClass,
+  itemRowClass,
 } from "@/components/ui";
 import { cx } from "@/lib/cx";
 import { formatBytes, formatDateTime } from "@/lib/format";
@@ -25,9 +29,6 @@ type DialogState =
   | { type: "revoke"; config: VpnConfig }
   | { type: "delete"; config: VpnConfig }
   | { type: "artifact"; config: VpnConfig; artifact: Artifact };
-
-const configGrid =
-  "grid gap-3 md:grid-cols-[minmax(0,1.15fr)_minmax(0,1.15fr)_minmax(0,0.85fr)_minmax(0,1.15fr)_minmax(0,1.15fr)] md:items-center";
 
 export function ConfigurationsView() {
   const {
@@ -64,105 +65,84 @@ export function ConfigurationsView() {
           text="Новая запись появится только в этом списке. Файл .conf и QR-код не формируются."
         />
       ) : (
-        <div className="glass overflow-hidden">
-          <div
-            className={cx(
-              configGrid,
-              "hidden border-b border-line bg-inset px-4 py-3 text-xs font-medium text-muted md:grid",
-            )}
-          >
-            <span>Конфигурация</span>
-            <span>Сервер</span>
-            <span>Статус</span>
-            <span>Трафик</span>
-            <span>Создана</span>
-          </div>
+        <div className="flex flex-col gap-2">
           {configurations.map((config) => {
             const server = servers.find((item) => item.id === config.serverId);
             const active = config.status === "active";
             return (
-              <article key={config.id} className="border-b border-line last:border-b-0">
-                <div className={cx(configGrid, "px-4 py-3")}>
-                  <Cell label="Конфигурация">
-                    <p className="truncate font-medium text-ink">{config.name}</p>
-                    <p className="mt-0.5 truncate font-mono text-[10px] text-muted">
-                      {config.id}
-                    </p>
-                  </Cell>
-                  <Cell label="Сервер">
-                    <p className="truncate font-mono text-sm text-ink">
-                      {server ? server.name : "—"}
-                    </p>
-                    <p className="mt-0.5 truncate text-xs text-muted">
-                      {server ? server.location : "Сервер удалён из списка"}
-                    </p>
-                  </Cell>
-                  <Cell label="Статус">
-                    <StatusBadge status={config.status} />
-                  </Cell>
-                  <Cell label="Трафик">
-                    <p className="font-mono text-sm text-ink tabular-nums">
-                      {formatBytes(config.rxBytes + config.txBytes)}
-                    </p>
-                    <p className="mt-0.5 font-mono text-[10px] text-muted">
-                      RX {formatBytes(config.rxBytes)} · TX {formatBytes(config.txBytes)}
-                    </p>
-                  </Cell>
-                  <Cell label="Создана">
-                    <p className="font-mono text-xs text-ink">
-                      {formatDateTime(config.createdAt)}
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-muted">
-                      {config.lastHandshake
-                        ? `handshake ${formatDateTime(config.lastHandshake)}`
-                        : "рукопожатия нет"}
-                    </p>
-                  </Cell>
+              <article key={config.id} className={cx(itemRowClass, configRowGrid)}>
+                <div className="col-span-2 flex min-w-0 items-center gap-3 lg:col-span-1">
+                  <RowMark>
+                    <DeviceIcon name={config.name} className="h-4 w-4" />
+                  </RowMark>
+                  <p className="truncate text-sm font-medium text-ink">{config.name}</p>
                 </div>
-                <div className="flex flex-col gap-2 border-t border-line bg-inset/60 px-4 py-2 lg:flex-row lg:items-center lg:justify-between">
-                  <p className="text-xs font-medium text-muted">Экспорт</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={!active}
-                      onClick={() =>
-                        setDialog({ type: "artifact", config, artifact: "conf" })
-                      }
-                    >
-                      .conf
-                      <DemoChip />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={!active}
-                      onClick={() =>
-                        setDialog({ type: "artifact", config, artifact: "qr" })
-                      }
-                    >
-                      QR
-                      <DemoChip />
-                    </Button>
-                    {active ? (
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        onClick={() => setDialog({ type: "revoke", config })}
-                      >
-                        Отозвать
-                        <DemoChip />
-                      </Button>
-                    ) : null}
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      onClick={() => setDialog({ type: "delete", config })}
-                    >
-                      Удалить
-                      <DemoChip />
-                    </Button>
-                  </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted lg:hidden">Сервер</p>
+                  <p className="truncate text-sm text-ink">
+                    {server ? server.name : "Сервер удалён"}
+                  </p>
+                </div>
+                <StatusBadge status={config.status} />
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted lg:hidden">Трафик</p>
+                  <p className="truncate text-sm text-ink tabular-nums">
+                    {formatBytes(config.rxBytes + config.txBytes)}
+                  </p>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted lg:hidden">Создана</p>
+                  <p
+                    className="truncate text-sm text-ink"
+                    title={
+                      config.lastHandshake
+                        ? `Рукопожатие ${formatDateTime(config.lastHandshake)}`
+                        : "Рукопожатия нет"
+                    }
+                  >
+                    {formatDateTime(config.createdAt)}
+                  </p>
+                </div>
+                <div className="col-span-2 flex flex-wrap justify-end gap-1.5 lg:col-span-1">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!active}
+                    onClick={() =>
+                      setDialog({ type: "artifact", config, artifact: "conf" })
+                    }
+                  >
+                    .conf
+                    <DemoChip />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!active}
+                    onClick={() =>
+                      setDialog({ type: "artifact", config, artifact: "qr" })
+                    }
+                  >
+                    QR
+                    <DemoChip />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    disabled={!active}
+                    onClick={() => setDialog({ type: "revoke", config })}
+                  >
+                    Отозвать
+                    <DemoChip />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={() => setDialog({ type: "delete", config })}
+                  >
+                    Удалить
+                    <DemoChip />
+                  </Button>
                 </div>
               </article>
             );
@@ -237,17 +217,6 @@ export function ConfigurationsView() {
           />
         ) : null}
       </Dialog>
-    </div>
-  );
-}
-
-function Cell({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <p className="text-xs text-muted md:hidden">
-        {label}
-      </p>
-      <div className="mt-0.5 md:mt-0">{children}</div>
     </div>
   );
 }

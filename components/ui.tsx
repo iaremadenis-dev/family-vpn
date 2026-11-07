@@ -5,6 +5,23 @@ import { cx } from "@/lib/cx";
 
 export const panelClass = "glass text-ink";
 
+export const itemRowClass =
+  "glass grid min-h-16 grid-cols-2 items-center gap-x-3 gap-y-2 px-3 py-2.5 lg:px-4 lg:py-2";
+
+export const serverRowGrid =
+  "lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1.2fr)_minmax(0,0.85fr)_7.25rem_minmax(0,0.9fr)_auto]";
+
+export const configRowGrid =
+  "lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.95fr)_7.25rem_minmax(0,0.7fr)_minmax(0,0.95fr)_auto]";
+
+export function RowMark({ children }: { children: ReactNode }) {
+  return (
+    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
+      {children}
+    </span>
+  );
+}
+
 export const inputClass =
   "h-10 w-full rounded-xl border border-line bg-inset px-3 text-sm text-ink outline-none transition-colors placeholder:text-muted focus:border-accent";
 

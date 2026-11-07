@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
+import { useId, useState } from "react";
 import { useDemo } from "@/components/demo-provider";
+import { IconServer } from "@/components/icons";
 import {
   Button,
   DemoChip,
@@ -10,8 +11,11 @@ import {
   EmptyState,
   Field,
   PageHeader,
+  RowMark,
   StatusBadge,
   inputClass,
+  itemRowClass,
+  serverRowGrid,
 } from "@/components/ui";
 import { cx } from "@/lib/cx";
 import { formatBytes, formatCount, formatDateTime } from "@/lib/format";
@@ -23,9 +27,6 @@ type DialogState =
   | { type: "edit"; server: VpnServer }
   | { type: "delete"; server: VpnServer }
   | { type: "status"; server: VpnServer };
-
-const serverGrid =
-  "grid gap-3 md:grid-cols-[minmax(0,1.15fr)_minmax(0,0.9fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_minmax(0,0.7fr)_minmax(0,1.25fr)] md:items-center";
 
 export function ServersView() {
   const {
@@ -39,10 +40,6 @@ export function ServersView() {
   } = useDemo();
   const [dialog, setDialog] = useState<DialogState>({ type: "closed" });
   const close = () => setDialog({ type: "closed" });
-  const peak = Math.max(
-    ...servers.map((server) => server.rxBytes + server.txBytes),
-    1,
-  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -64,120 +61,84 @@ export function ServersView() {
           text="Добавьте запись в демонстрационный список. Реальный VPS при этом не создаётся."
         />
       ) : (
-        <div className="glass overflow-hidden">
-          <div
-            className={cx(
-              serverGrid,
-              "hidden border-b border-line bg-inset px-4 py-3 text-xs font-medium text-muted md:grid",
-            )}
-          >
-            <span>Узел</span>
-            <span>Локация</span>
-            <span>Endpoint</span>
-            <span>Статус</span>
-            <span>Конфиги</span>
-            <span>Трафик</span>
-          </div>
+        <div className="flex flex-col gap-2">
           {servers.map((server) => {
             const related = configurations.filter(
               (config) => config.serverId === server.id,
             );
             const active = related.filter((config) => config.status === "active");
             const total = server.rxBytes + server.txBytes;
-            const share =
-              total === 0 ? 0 : Math.max(4, Math.round((total / peak) * 100));
             return (
-              <article key={server.id} className="border-b border-line last:border-b-0">
-                <div className={cx(serverGrid, "px-4 py-3")}>
-                  <Cell label="Узел">
-                    <p className="truncate font-mono text-sm text-ink">{server.name}</p>
+              <article key={server.id} className={cx(itemRowClass, serverRowGrid)}>
+                <div className="col-span-2 flex min-w-0 items-center gap-3 lg:col-span-1">
+                  <RowMark>
+                    <IconServer className="h-4 w-4" />
+                  </RowMark>
+                  <p className="min-w-0 truncate text-sm font-medium text-ink">
+                    {server.name}
                     {server.isDefault ? (
-                      <p className="mt-1 text-xs font-medium text-info">по умолчанию</p>
+                      <span className="ml-2 text-xs font-medium text-info">по умолчанию</span>
                     ) : null}
-                  </Cell>
-                  <Cell label="Локация">
-                    <p className="truncate text-sm text-ink">{server.location}</p>
-                  </Cell>
-                  <Cell label="Endpoint">
-                    <p className="truncate font-mono text-sm text-ink">
-                      {server.endpoint}:{server.listenPort}
-                    </p>
-                  </Cell>
-                  <Cell label="Статус">
-                    <StatusBadge status={server.status} />
-                  </Cell>
-                  <Cell label="Конфиги">
-                    <p className="font-mono text-sm text-ink tabular-nums">
-                      {active.length}
-                      <span className="text-muted">/{related.length}</span>
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-muted">активные</p>
-                  </Cell>
-                  <Cell label="Трафик">
-                    <p className="font-mono text-sm text-ink tabular-nums">
-                      {formatBytes(total)}
-                    </p>
-                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-inset">
-                      <div
-                        className={cx(
-                          "h-full rounded-full",
-                          server.status === "offline" ? "bg-muted" : "bg-accent",
-                        )}
-                        style={{ width: `${share}%` }}
-                      />
-                    </div>
-                    <p className="mt-1 font-mono text-[10px] text-muted">
-                      RX {formatBytes(server.rxBytes)} · TX {formatBytes(server.txBytes)}
-                    </p>
-                  </Cell>
-                </div>
-                <div className="flex flex-col gap-2 border-t border-line bg-inset/60 px-4 py-2 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="font-mono text-[11px] text-muted">
-                    {formatCount(active.length, [
-                      "активная конфигурация",
-                      "активные конфигурации",
-                      "активных конфигураций",
-                    ])}
-                    {" · "}
-                    {server.checkedAt
-                      ? `пример проверки ${formatDateTime(server.checkedAt)}`
-                      : "проверка не выполнялась"}
                   </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => setDialog({ type: "status", server })}
-                    >
-                      Статус
-                      <DemoChip />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => setDialog({ type: "edit", server })}
-                    >
-                      Изменить
-                      <DemoChip />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={server.isDefault}
-                      onClick={() => setDefaultServer(server.id)}
-                    >
-                      Сделать по умолчанию
-                      <DemoChip />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      onClick={() => setDialog({ type: "delete", server })}
-                    >
-                      Удалить
-                      <DemoChip />
-                    </Button>
-                  </div>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted lg:hidden">IP</p>
+                  <p className="truncate font-mono text-sm text-ink">
+                    {server.endpoint}:{server.listenPort}
+                  </p>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted lg:hidden">Расположение</p>
+                  <p className="truncate text-sm text-ink">{server.location}</p>
+                </div>
+                <StatusBadge status={server.status} />
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted lg:hidden">Статистика</p>
+                  <p
+                    className="truncate text-sm text-ink tabular-nums"
+                    title={
+                      server.checkedAt
+                        ? `Пример проверки ${formatDateTime(server.checkedAt)}`
+                        : "Проверка не выполнялась"
+                    }
+                  >
+                    {active.length}/{related.length} · {formatBytes(total)}
+                  </p>
+                </div>
+                <div className="col-span-2 flex flex-wrap justify-end gap-1.5 lg:col-span-1">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setDialog({ type: "status", server })}
+                  >
+                    Статус
+                    <DemoChip />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setDialog({ type: "edit", server })}
+                  >
+                    Изменить
+                    <DemoChip />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={server.isDefault}
+                    onClick={() => setDefaultServer(server.id)}
+                  >
+                    Сделать по умолчанию
+                    <DemoChip />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={() => setDialog({ type: "delete", server })}
+                  >
+                    Удалить
+                    <DemoChip />
+                  </Button>
                 </div>
               </article>
             );
@@ -231,17 +192,6 @@ export function ServersView() {
           />
         ) : null}
       </Dialog>
-    </div>
-  );
-}
-
-function Cell({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <p className="text-xs text-muted md:hidden">
-        {label}
-      </p>
-      <div className="mt-0.5 md:mt-0">{children}</div>
     </div>
   );
 }
