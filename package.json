@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:pairing": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/pairing.test.ts"
   },
   "dependencies": {
     "next": "16.4.5",

@@ -140,14 +140,14 @@ export function AppShell({
               {summary.serverCount} в базе
             </span>
             <span className="hidden rounded-full bg-inset px-2.5 py-1 text-muted md:inline">
-              Агент не подключён
+              {summary.onlineCount > 0 ? `${summary.onlineCount} на связи` : "На связи нет"}
             </span>
           </div>
         </header>
 
         <p className="px-1 text-xs leading-5 text-muted">
-          Записи серверов хранятся в локальной базе. Состояние WireGuard, трафик и
-          выпуск конфигураций появятся после подключения агента.
+          Статус сервера берётся из сообщений агента. Трафик и выпуск конфигураций
+          пока не собираются.
         </p>
         {children}
       </div>

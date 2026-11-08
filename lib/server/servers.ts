@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/server/db";
 import { UserError } from "@/lib/server/errors";
 import { requireAdmin } from "@/lib/server/guard";
+import { deriveLinkStatus } from "@/lib/server/pairing";
 import type { ServerInput, ServerRecord } from "@/lib/types";
 
 const HOST =
@@ -11,9 +12,10 @@ export async function listServers(): Promise<ServerRecord[]> {
   await requireAdmin();
   const rows = getDb()
     .prepare(
-      `SELECT id, name, location, endpoint, listen_port, is_default, created_at, updated_at
+      `SELECT servers.*, agents.server_id AS agent_server_id, agents.revoked_at AS agent_revoked_at
        FROM servers
-       ORDER BY is_default DESC, name COLLATE NOCASE ASC`,
+       LEFT JOIN agents ON agents.server_id = servers.id
+       ORDER BY servers.is_default DESC, servers.name COLLATE NOCASE ASC`,
     )
     .all();
   return rows.map(mapServer);
@@ -37,6 +39,14 @@ export async function createServer(input: ServerInput): Promise<ServerRecord> {
     isDefault,
     createdAt: now,
     updatedAt: now,
+    linkStatus: "unchecked",
+    paired: false,
+    agentRevoked: false,
+    agentVersion: null,
+    lastSeenAt: null,
+    wgPublicKey: null,
+    vpnSubnet: null,
+    externalInterface: null,
   };
 
   db.prepare(
@@ -56,24 +66,24 @@ export async function createServer(input: ServerInput): Promise<ServerRecord> {
   return record;
 }
 
-export async function updateServer(id: string, input: ServerInput) {
+export async function updateServer(id: string, input: { name: string; location: string }) {
   await requireAdmin();
   assertId(id);
-  const value = validateServer(input);
-  const db = getDb();
-  const current = db.prepare("SELECT id FROM servers WHERE id = ?").get(id);
+  const name = input.name.trim();
+  const location = input.location.trim();
+  if (!name) throw new UserError("Укажите название.");
+  if (name.length > 64) throw new UserError("Название длиннее 64 символов.");
+  if (/[\u0000-\u001F]/.test(name)) throw new UserError("Название содержит недопустимые символы.");
+  if (!location) throw new UserError("Укажите расположение.");
+  if (location.length > 80) throw new UserError("Расположение длиннее 80 символов.");
+  if (/[\u0000-\u001F]/.test(location)) {
+    throw new UserError("Расположение содержит недопустимые символы.");
+  }
+  const current = getDb().prepare("SELECT id FROM servers WHERE id = ?").get(id);
   if (!current) throw new UserError("Сервер не найден.");
-
-  const duplicate = db
-    .prepare("SELECT id FROM servers WHERE endpoint = ? AND listen_port = ? AND id != ?")
-    .get(value.endpoint, value.listenPort, id);
-  if (duplicate) throw new UserError("Сервер с таким адресом и портом уже есть.");
-
-  db.prepare(
-    `UPDATE servers
-     SET name = ?, location = ?, endpoint = ?, listen_port = ?, updated_at = ?
-     WHERE id = ?`,
-  ).run(value.name, value.location, value.endpoint, value.listenPort, new Date().toISOString(), id);
+  getDb()
+    .prepare("UPDATE servers SET name = ?, location = ?, updated_at = ? WHERE id = ?")
+    .run(name, location, new Date().toISOString(), id);
 }
 
 export async function deleteServer(id: string) {
@@ -85,6 +95,8 @@ export async function deleteServer(id: string) {
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    db.prepare("DELETE FROM enrollments WHERE server_id = ?").run(id);
+    db.prepare("DELETE FROM agents WHERE server_id = ?").run(id);
     db.prepare("DELETE FROM servers WHERE id = ?").run(id);
     if (Number(current.is_default) === 1) {
       const next = db
@@ -151,6 +163,9 @@ function assertId(id: string) {
 }
 
 function mapServer(row: Record<string, string | number | bigint | null | Uint8Array>): ServerRecord {
+  const paired = row.agent_server_id !== null && row.agent_server_id !== undefined;
+  const revoked = paired && row.agent_revoked_at !== null && row.agent_revoked_at !== undefined;
+  const lastSeenAt = row.last_seen_at === null || row.last_seen_at === undefined ? null : String(row.last_seen_at);
   return {
     id: String(row.id),
     name: String(row.name),
@@ -160,5 +175,21 @@ function mapServer(row: Record<string, string | number | bigint | null | Uint8Ar
     isDefault: Number(row.is_default) === 1,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+    paired,
+    agentRevoked: revoked,
+    agentVersion: row.agent_version === null || row.agent_version === undefined ? null : String(row.agent_version),
+    lastSeenAt,
+    wgPublicKey: row.wg_public_key === null || row.wg_public_key === undefined ? null : String(row.wg_public_key),
+    vpnSubnet: row.vpn_subnet === null || row.vpn_subnet === undefined ? null : String(row.vpn_subnet),
+    externalInterface:
+      row.external_interface === null || row.external_interface === undefined
+        ? null
+        : String(row.external_interface),
+    linkStatus: deriveLinkStatus({
+      paired,
+      revoked,
+      lastSeenAt,
+      wgUp: row.wg_up === null || row.wg_up === undefined ? null : Number(row.wg_up) === 1,
+    }),
   };
 }

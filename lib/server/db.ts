@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const globalForDb = globalThis as unknown as { familyVpnDb?: DatabaseSync };
+const migrated = new WeakSet<DatabaseSync>();
 
 export function dataDirectory(): string {
   const configured = process.env.FAMILY_VPN_DATA_DIR?.trim();
@@ -11,28 +12,58 @@ export function dataDirectory(): string {
 }
 
 export function getDb(): DatabaseSync {
-  if (globalForDb.familyVpnDb) return globalForDb.familyVpnDb;
+  if (!globalForDb.familyVpnDb) {
+    const directory = dataDirectory();
+    mkdirSync(directory, { recursive: true });
+    const db = new DatabaseSync(path.join(directory, "family-vpn.sqlite"));
+    db.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA foreign_keys = ON;
+      PRAGMA busy_timeout = 5000;
+    `);
+    globalForDb.familyVpnDb = db;
+  }
+  if (!migrated.has(globalForDb.familyVpnDb)) {
+    migrate(globalForDb.familyVpnDb);
+    migrated.add(globalForDb.familyVpnDb);
+  }
+  return globalForDb.familyVpnDb;
+}
 
-  const directory = dataDirectory();
-  mkdirSync(directory, { recursive: true });
-  const db = new DatabaseSync(path.join(directory, "family-vpn.sqlite"));
-  db.exec(`
-    PRAGMA journal_mode = WAL;
-    PRAGMA foreign_keys = ON;
-    PRAGMA busy_timeout = 5000;
-  `);
-  migrate(db);
-  globalForDb.familyVpnDb = db;
-  return db;
+export function resetDbForTests() {
+  const db = globalForDb.familyVpnDb;
+  globalForDb.familyVpnDb = undefined;
+  db?.close();
 }
 
 function migrate(db: DatabaseSync) {
   const row = db.prepare("PRAGMA user_version").get();
   const version = Number(row?.user_version ?? 0);
-  if (version >= 1) return;
+  if (version >= 2) {
+    const agents = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agents'")
+      .get();
+    if (!agents) db.exec(agentSchema);
+    return;
+  }
 
-  db.exec(`
-    BEGIN IMMEDIATE;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (version < 1) {
+      db.exec(baseSchema);
+    } else {
+      db.exec(upgradeFromV1);
+    }
+    db.exec(agentSchema);
+    db.exec("PRAGMA user_version = 2");
+    db.exec("COMMIT");
+  } catch (cause) {
+    db.exec("ROLLBACK");
+    throw cause;
+  }
+}
+
+const baseSchema = `
     CREATE TABLE admin (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       display_name TEXT NOT NULL,
@@ -52,7 +83,13 @@ function migrate(db: DatabaseSync) {
       listen_port INTEGER NOT NULL,
       is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      wg_public_key TEXT,
+      vpn_subnet TEXT,
+      external_interface TEXT,
+      agent_version TEXT,
+      last_seen_at TEXT,
+      wg_up INTEGER
     );
     CREATE UNIQUE INDEX servers_endpoint_port ON servers (endpoint, listen_port);
     CREATE TABLE audit_log (
@@ -66,7 +103,44 @@ function migrate(db: DatabaseSync) {
       subject_hash TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
-    PRAGMA user_version = 1;
-    COMMIT;
-  `);
-}
+`;
+
+const upgradeFromV1 = `
+    ALTER TABLE servers ADD COLUMN wg_public_key TEXT;
+    ALTER TABLE servers ADD COLUMN vpn_subnet TEXT;
+    ALTER TABLE servers ADD COLUMN external_interface TEXT;
+    ALTER TABLE servers ADD COLUMN agent_version TEXT;
+    ALTER TABLE servers ADD COLUMN last_seen_at TEXT;
+    ALTER TABLE servers ADD COLUMN wg_up INTEGER;
+`;
+
+const agentSchema = `
+    CREATE TABLE IF NOT EXISTS enrollments (
+      id TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL UNIQUE,
+      public_key TEXT NOT NULL,
+      nonce TEXT NOT NULL,
+      version TEXT NOT NULL,
+      report_json TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      claimed_at TEXT,
+      server_id TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS agents (
+      server_id TEXT PRIMARY KEY,
+      public_key TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      delivery_token TEXT,
+      version TEXT,
+      revoked_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS agent_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scope TEXT NOT NULL,
+      subject_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+`;

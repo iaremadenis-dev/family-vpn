@@ -5,6 +5,8 @@ import type { ServerRecord } from "@/lib/types";
 
 export function DashboardView({ servers }: { servers: ServerRecord[] }) {
   const defaultServer = servers.find((server) => server.isDefault);
+  const online = servers.filter((server) => server.linkStatus === "online").length;
+  const paired = servers.some((server) => server.paired);
 
   return (
     <div className="flex flex-col gap-5">
@@ -27,9 +29,13 @@ export function DashboardView({ servers }: { servers: ServerRecord[] }) {
         />
         <Stat
           label="Агенты"
-          value="0"
+          value={String(online)}
           wash="bg-ok/30"
-          hint="Проверка Online / Offline не выполняется"
+          hint={
+            paired
+              ? "На связи те, от кого сообщение пришло за последние 45 секунд"
+              : "Привязанных агентов нет"
+          }
         />
         <Stat
           label="Трафик"
@@ -72,7 +78,7 @@ export function DashboardView({ servers }: { servers: ServerRecord[] }) {
                       {server.location} · {server.endpoint}:{server.listenPort}
                     </p>
                   </div>
-                  <StatusBadge status="unchecked" />
+                  <StatusBadge status={server.linkStatus} />
                 </li>
               ))}
             </ul>

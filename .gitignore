@@ -58,3 +58,8 @@ id_ecdsa
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite-journal
+
+# local agent build and state
+/agent/family-vpn-agent
+/agent/family-vpn-agent.exe
+agent.json
