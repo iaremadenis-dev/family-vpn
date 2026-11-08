@@ -11,40 +11,38 @@ Family VPN — админ-панель одного администратора
 - App Router
 - Tailwind CSS
 - SQLite через встроенный `node:sqlite` (Node.js 24)
-- ESLint
-- npm
+- Go-агент
+- Docker Compose + Caddy для HTTPS
 
 ## Этот этап
 
-Работают локальная база, вход администратора, привязка агента по одноразовому коду и статус по его сообщениям.
+Работают локальная база, вход администратора, привязка агента и подготовка production-развёртывания.
 
-Ещё не подключены трафик, handshake, выпуск `.conf` и QR-код. Пока этих данных нет, интерфейс не подставляет примеры.
+Ещё не подключены трафик, handshake, выпуск `.conf` и QR-код. Удалённый VPS автоматически не меняется.
 
-Агент лежит в `agent/`, установщик — в `installer/install.sh`. Установщик не скачивает скрипт из сети и не меняет уже существующий `wg0`. Удалённый VPS не сможет привязаться, пока панель доступна только на localhost. Форма будущей команды:
+Развёртывание панели: [docs/deploy.md](docs/deploy.md).  
+Подключение уже настроенного VPS: [docs/vps-connect.md](docs/vps-connect.md).  
+Архитектура: [docs/architecture.md](docs/architecture.md).
 
-```bash
-sudo bash install.sh --backend https://panel.example --binary /path/to/family-vpn-agent --sha256 <64 hex>
-```
+После публикации релиза одна установочная команда печатается в `releases/INSTALL.txt`. Установщик сверяет контрольные суммы и не перезаписывает существующий `wg0`.
 
-База создаётся в каталоге `data/` и не коммитится. Другой каталог можно задать переменной `FAMILY_VPN_DATA_DIR`. За обратным прокси дополнительно ставится `FAMILY_VPN_TRUST_PROXY=1`.
-
-Архитектура следующих этапов: [docs/architecture.md](docs/architecture.md).
-
-## Запуск
+## Запуск локально
 
 ```bash
 npm install
 npm run dev
 ```
 
-При первом открытии панель просит создать пароль администратора. Пароль хранится только как хеш.
+База — каталог `data/` или `FAMILY_VPN_DATA_DIR`. За прокси: `FAMILY_VPN_TRUST_PROXY=1`.
 
-Проверка:
+## Проверки
 
 ```bash
 npm run lint
 npm run build
 npm run test:pairing
+bash scripts/verify-production-ready.sh
 ```
 
-Протокол клиента агента: `go test ./...` в каталоге `agent`.
+Протокол агента: `go test ./...` в каталоге `agent`.  
+Сборка релиза агента: `FAMILY_VPN_PUBLIC_URL=https://panel.example.com bash scripts/build-release.sh`.

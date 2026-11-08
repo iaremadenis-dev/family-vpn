@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const agentVersion = "0.2.0"
+const agentVersion = "0.3.0"
 
 var (
 	ErrRevoked = errors.New("agent access revoked")

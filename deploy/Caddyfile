@@ -1,0 +1,16 @@
+{$FAMILY_VPN_DOMAIN} {
+	encode gzip
+
+	# Public agent install artifacts only. No admin APIs here.
+	handle_path /releases/* {
+		root * /srv/releases
+		file_server {
+			hide .*
+		}
+		header Cache-Control "public, max-age=300"
+	}
+
+	handle {
+		reverse_proxy panel:3000
+	}
+}

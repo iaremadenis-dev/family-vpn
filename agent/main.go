@@ -239,13 +239,17 @@ func saveState(dir string, state *stateFile) error {
 
 func newPairingCode() string {
 	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	buf := make([]byte, 20)
-	if _, err := rand.Read(buf); err != nil {
-		panic("random source failed")
-	}
 	raw := make([]byte, 20)
-	for i, value := range buf {
-		raw[i] = alphabet[int(value)%len(alphabet)]
+	for i := 0; i < len(raw); {
+		var one [1]byte
+		if _, err := rand.Read(one[:]); err != nil {
+			panic("random source failed")
+		}
+		if int(one[0]) >= 256-(256%len(alphabet)) {
+			continue
+		}
+		raw[i] = alphabet[int(one[0])%len(alphabet)]
+		i++
 	}
 	return string(raw[0:5]) + "-" + string(raw[5:10]) + "-" + string(raw[10:15]) + "-" + string(raw[15:20])
 }

@@ -39,9 +39,21 @@ export type LinkFacts = {
 };
 
 export function generatePairingCode(): string {
-  const bytes = randomBytes(20);
-  const raw = Array.from(bytes, (byte) => CODE_ALPHABET[byte % 32]).join("");
+  // 20 symbols from a 32-char alphabet ≈ 100 bits. Rejection sampling keeps the map unbiased.
+  const raw = Array.from({ length: 20 }, () => {
+    for (;;) {
+      const byte = randomBytes(1)[0]!;
+      if (byte >= 256 - (256 % CODE_ALPHABET.length)) continue;
+      return CODE_ALPHABET[byte % CODE_ALPHABET.length]!;
+    }
+  }).join("");
   return raw.replace(/(.{5})/g, "$1-").slice(0, 23);
+}
+
+export function pairingCodeEntropyBits(code: string): number {
+  const normalized = code.toUpperCase().replace(/[\s-]/g, "");
+  if (normalized.length === 0) return 0;
+  return normalized.length * Math.log2(CODE_ALPHABET.length);
 }
 
 export function deriveLinkStatus(facts: LinkFacts, now = Date.now()): "unchecked" | "online" | "degraded" | "offline" {
@@ -363,6 +375,9 @@ function assertLabel(value: string, empty: string, max: number): string {
 function normalizeCode(value: string): string {
   const code = value.toUpperCase().replace(/[\s-]/g, "");
   if (code.length !== 20 || [...code].some((char) => !CODE_ALPHABET.includes(char))) {
+    throw new UserError("Код не найден.");
+  }
+  if (pairingCodeEntropyBits(code) < 100) {
     throw new UserError("Код не найден.");
   }
   return code;

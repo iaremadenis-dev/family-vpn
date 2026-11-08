@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:pairing": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/pairing.test.ts"
+    "test:pairing": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/pairing.test.ts",
+    "test:production": "bash scripts/verify-production-ready.sh",
+    "release:agent": "bash scripts/build-release.sh"
   },
   "dependencies": {
     "next": "16.4.5",

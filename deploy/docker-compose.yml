@@ -1,0 +1,47 @@
+# Family VPN production stack.
+# Do not start this without a confirmed domain and data directory.
+name: family-vpn
+
+services:
+  panel:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      FAMILY_VPN_DATA_DIR: /data
+      FAMILY_VPN_TRUST_PROXY: "1"
+      FAMILY_VPN_PUBLIC_URL: ${FAMILY_VPN_PUBLIC_URL}
+    volumes:
+      - panel-data:/data
+    expose:
+      - "3000"
+    networks:
+      - family-vpn
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      FAMILY_VPN_DOMAIN: ${FAMILY_VPN_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../releases:/srv/releases:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - panel
+    networks:
+      - family-vpn
+
+volumes:
+  panel-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  family-vpn:

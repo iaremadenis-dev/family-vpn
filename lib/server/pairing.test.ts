@@ -12,6 +12,7 @@ import {
   enrollAgent,
   generatePairingCode,
   heartbeatAgent,
+  pairingCodeEntropyBits,
   pollEnrollment,
   revokeAgent,
   type AgentReport,
@@ -77,6 +78,17 @@ function poll(enrollmentId: string, nonce: string) {
 }
 
 describe("pairing", { concurrency: 1 }, () => {
+  test("pairing codes keep high entropy", () => {
+    const seen = new Set<string>();
+    for (let index = 0; index < 40; index += 1) {
+      const code = generatePairingCode();
+      assert.equal(pairingCodeEntropyBits(code), 100);
+      assert.equal(code.replace(/-/g, "").length, 20);
+      assert.equal(seen.has(code), false);
+      seen.add(code);
+    }
+  });
+
   test("status follows real heartbeats only", () => {
     assert.equal(deriveLinkStatus({ paired: false, revoked: false, lastSeenAt: null, wgUp: null }), "unchecked");
     assert.equal(
