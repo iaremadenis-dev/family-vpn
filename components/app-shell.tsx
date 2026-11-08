@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType, SVGProps } from "react";
-import { useDemo } from "@/components/demo-provider";
 import {
   IconConfig,
   IconOverview,
@@ -11,6 +10,7 @@ import {
   IconSettings,
 } from "@/components/icons";
 import { cx } from "@/lib/cx";
+import type { PanelSummary } from "@/lib/types";
 
 const navItems: Array<{
   href: string;
@@ -88,12 +88,15 @@ function Mark({ compact = false }: { compact?: boolean }) {
   );
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  summary,
+  children,
+}: {
+  summary: PanelSummary;
+  children: React.ReactNode;
+}) {
   const pathname = usePathname();
-  const { adminName, servers, configurations } = useDemo();
   const title = sections[pathname] ?? "Family VPN";
-  const online = servers.filter((server) => server.status === "online").length;
-  const allOnline = servers.length > 0 && online === servers.length;
 
   return (
     <div className="relative min-h-dvh md:pl-[16.75rem]">
@@ -118,8 +121,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
           <div className="relative z-10 m-3 rounded-2xl bg-canvas/75 px-3 py-3 backdrop-blur-md">
-            <p className="truncate text-sm font-medium text-ink">{adminName}</p>
-            <p className="mt-0.5 text-xs text-muted">Локальная сессия</p>
+            <p className="truncate text-sm font-medium text-ink">{summary.adminName}</p>
+            <p className="mt-0.5 text-xs text-muted">Администратор</p>
           </div>
         </div>
       </aside>
@@ -133,27 +136,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <h1 className="truncate text-sm font-semibold text-ink">{title}</h1>
           </div>
           <div className="flex shrink-0 items-center gap-2 text-xs">
-            <span
-              className={cx(
-                "hidden rounded-full px-2.5 py-1 sm:inline",
-                allOnline ? "bg-ok/15 text-ok" : "bg-inset text-muted",
-              )}
-            >
-              <span className={online > 0 ? "text-ok" : "text-bad"}>{online}</span>
-              <span> из {servers.length} в сети</span>
+            <span className="hidden rounded-full bg-inset px-2.5 py-1 text-muted sm:inline">
+              {summary.serverCount} в базе
             </span>
             <span className="hidden rounded-full bg-inset px-2.5 py-1 text-muted md:inline">
-              {configurations.length} конфиг.
-            </span>
-            <span className="rounded-full bg-warn/15 px-2.5 py-1 font-medium text-warn">
-              Демо
+              Агент не подключён
             </span>
           </div>
         </header>
 
         <p className="px-1 text-xs leading-5 text-muted">
-          Цифры и списки — пример. Кнопки не обращаются к VPS и WireGuard: ключи и
-          файлы .conf не создаются, изменения не сохраняются.
+          Записи серверов хранятся в локальной базе. Состояние WireGuard, трафик и
+          выпуск конфигураций появятся после подключения агента.
         </p>
         {children}
       </div>

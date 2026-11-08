@@ -51,3 +51,10 @@ id_ecdsa
 # real WireGuard and VPN configs
 *.conf
 *.wg
+
+# local database, sessions and future secrets
+/data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal

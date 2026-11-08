@@ -81,22 +81,25 @@ export function DemoNote({ children }: { children: ReactNode }) {
 }
 
 const ledStyles = {
+  unchecked: "bg-muted",
   online: "bg-ok",
   degraded: "bg-warn",
-  offline: "bg-muted",
+  offline: "bg-bad",
   active: "bg-ok",
   revoked: "bg-bad",
 } as const;
 
 const badgeStyles = {
+  unchecked: "bg-inset text-muted",
   online: "bg-ok/15 text-ok",
   degraded: "bg-warn/15 text-warn",
-  offline: "bg-inset text-muted",
+  offline: "bg-bad/15 text-bad",
   active: "bg-ok/15 text-ok",
   revoked: "bg-bad/15 text-bad",
 } as const;
 
 const badgeLabels = {
+  unchecked: "Не подключён",
   online: "В сети",
   degraded: "Нестабилен",
   offline: "Не в сети",

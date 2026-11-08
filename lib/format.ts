@@ -27,7 +27,7 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(digits)} ${units[exponent]}`;
 }
 
-/** Demo timestamps are shown in UTC+7 so server and browser render the same text. */
+/** Timestamps are shown in UTC+7 so server and browser render the same text. */
 export function formatDateTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "нет данных";

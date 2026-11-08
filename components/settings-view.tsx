@@ -1,86 +1,143 @@
 "use client";
 
-import { useId, useState } from "react";
-import { useDemo } from "@/components/demo-provider";
+import { useActionState } from "react";
+import { logout } from "@/app/actions/auth";
+import {
+  changePasswordAction,
+  renameAdminAction,
+  type SettingsFormState,
+} from "@/app/actions/settings";
 import { useTheme } from "@/components/theme-provider";
-import { Button, DemoNote, Dialog, Field, PageHeader, inputClass } from "@/components/ui";
+import { Button, Field, PageHeader, inputClass } from "@/components/ui";
 import { cx } from "@/lib/cx";
+import { formatDateTime } from "@/lib/format";
 import type { Theme } from "@/lib/theme";
+import type { AuditEntry } from "@/lib/types";
+
+const idle: SettingsFormState = { error: null, saved: false };
 
 const systemRows = [
-  ["Режим", "Демонстрационный интерфейс"],
-  ["Администраторы", "Одна учётная запись"],
+  ["Хранение", "SQLite в локальном каталоге data, файл не попадает в Git"],
+  ["Администраторы", "Одна учётная запись, пароль хранится как хеш"],
+  ["Сессия", "Cookie HttpOnly, проверка на сервере"],
+  ["Агент", "Не подключён"],
+  ["Конфигурации", "Выпуск не реализован"],
   ["Учётные записи VPN", "Не используются"],
   ["Подписки и платежи", "Не используются"],
-  ["Протокол", "WireGuard, управление не подключено"],
-  ["Размещение", "Отдельный сервер админки планируется позже"],
 ] as const;
 
-export function SettingsView() {
-  const { adminName, setAdminName, resetDemo } = useDemo();
+const auditLabels: Record<string, string> = {
+  "admin.setup": "Создан администратор",
+  "admin.login": "Вход",
+  "admin.logout": "Выход",
+  "admin.login_failed": "Неудачный вход",
+  "admin.rename": "Изменено имя",
+  "admin.password": "Изменён пароль",
+  "server.create": "Добавлен сервер",
+  "server.update": "Изменён сервер",
+  "server.delete": "Удалён сервер",
+  "server.default": "Выбран основной сервер",
+};
+
+export function SettingsView({
+  adminName,
+  audit,
+}: {
+  adminName: string;
+  audit: AuditEntry[];
+}) {
   const { theme, setTheme } = useTheme();
-  const nameId = useId();
-  const [draft, setDraft] = useState(adminName);
-  const [error, setError] = useState<string | null>(null);
-  const [resetOpen, setResetOpen] = useState(false);
+  const [nameState, saveName, namePending] = useActionState(renameAdminAction, idle);
+  const [passwordState, savePassword, passwordPending] = useActionState(
+    changePasswordAction,
+    idle,
+  );
 
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
         kicker="Система"
         title="Настройки"
-        description="Одна учётная запись администратора, тема оформления и общие параметры системы."
+        description="Учётная запись администратора, тема и журнал действий панели."
       />
 
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="flex flex-col gap-4">
           <section className="glass overflow-hidden">
-            <SectionHeading code="OP">Администратор</SectionHeading>
-            <div className="px-4 py-4">
-              <p className="text-sm text-muted">
-                Вход и проверка пароля на этом этапе не подключены. Имя видно только в
-                боковой панели текущего окна.
-              </p>
-              <form
-                className="mt-4 flex max-w-md flex-col gap-4"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (!draft.trim()) {
-                    setError("Укажите имя.");
-                    return;
-                  }
-                  if (draft.trim().length > 40) {
-                    setError("Имя длиннее 40 символов.");
-                    return;
-                  }
-                  setError(null);
-                  setAdminName(draft);
-                }}
-              >
-                <Field id={nameId} label="Отображаемое имя">
+            <SectionHeading>Администратор</SectionHeading>
+            <div className="flex flex-col gap-5 px-4 py-4">
+              <form key={adminName} action={saveName} className="flex max-w-md flex-col gap-4">
+                <Field id="admin-name" label="Отображаемое имя">
                   <input
-                    id={nameId}
+                    id="admin-name"
+                    name="name"
                     className={inputClass}
-                    value={draft}
+                    defaultValue={adminName}
                     maxLength={40}
-                    autoComplete="off"
-                    onChange={(event) => setDraft(event.target.value)}
+                    autoComplete="nickname"
                   />
                 </Field>
-                {error ? <p className="text-sm text-bad">{error}</p> : null}
+                {nameState.error ? <p className="text-sm text-bad">{nameState.error}</p> : null}
+                {nameState.saved ? <p className="text-sm text-ok">Имя сохранено.</p> : null}
                 <div>
-                  <Button type="submit">Показать в интерфейсе</Button>
+                  <Button type="submit" disabled={namePending}>
+                    Сохранить имя
+                  </Button>
                 </div>
+              </form>
+
+              <form action={savePassword} className="flex max-w-md flex-col gap-4">
+                <Field id="current-password" label="Текущий пароль">
+                  <input
+                    id="current-password"
+                    name="current"
+                    type="password"
+                    className={inputClass}
+                    autoComplete="current-password"
+                  />
+                </Field>
+                <Field id="next-password" label="Новый пароль" hint="Не короче 12 символов, с буквой и цифрой.">
+                  <input
+                    id="next-password"
+                    name="next"
+                    type="password"
+                    className={inputClass}
+                    autoComplete="new-password"
+                  />
+                </Field>
+                <Field id="confirm-password" label="Новый пароль ещё раз">
+                  <input
+                    id="confirm-password"
+                    name="confirm"
+                    type="password"
+                    className={inputClass}
+                    autoComplete="new-password"
+                  />
+                </Field>
+                {passwordState.error ? (
+                  <p className="text-sm text-bad">{passwordState.error}</p>
+                ) : null}
+                {passwordState.saved ? <p className="text-sm text-ok">Пароль изменён.</p> : null}
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit" disabled={passwordPending}>
+                    Сменить пароль
+                  </Button>
+                </div>
+              </form>
+
+              <form action={logout}>
+                <Button type="submit" variant="secondary">
+                  Выйти
+                </Button>
               </form>
             </div>
           </section>
 
           <section className="glass overflow-hidden">
-            <SectionHeading code="UI">Тема</SectionHeading>
+            <SectionHeading>Тема</SectionHeading>
             <div className="px-4 py-4">
               <p className="text-sm text-muted">
-                Светлая и тёмная темы применяются сразу и запоминаются в этом браузере.
-                На сервер ничего не отправляется.
+                Светлая и тёмная темы запоминаются в этом браузере.
               </p>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <ThemeChoice
@@ -102,69 +159,53 @@ export function SettingsView() {
           </section>
         </div>
 
-        <section className="glass overflow-hidden">
-          <SectionHeading code="CFG">Система</SectionHeading>
-          <dl>
-            {systemRows.map(([label, value]) => (
-              <div
-                key={label}
-                className="grid gap-1 border-b border-line px-4 py-3 sm:grid-cols-[11rem_minmax(0,1fr)] sm:items-baseline"
-              >
-                <dt className="text-sm text-muted">
-                  {label}
-                </dt>
-                <dd className="text-sm text-ink">{value}</dd>
-              </div>
-            ))}
-          </dl>
-          <div className="px-4 py-4">
-            <Button variant="secondary" onClick={() => setResetOpen(true)}>
-              Вернуть примерные данные
-            </Button>
-            <p className="mt-2 text-xs text-muted">
-              Серверы, конфигурации и имя администратора вернутся к примеру. Тема
-              останется выбранной.
-            </p>
-          </div>
-        </section>
-      </div>
-
-      <Dialog
-        open={resetOpen}
-        title="Вернуть примерные данные"
-        onClose={() => setResetOpen(false)}
-      >
         <div className="flex flex-col gap-4">
-          <DemoNote>
-            Демонстрация. Локальные правки списка будут заменены исходным примером.
-            Серверы по сети не затрагиваются.
-          </DemoNote>
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="secondary" onClick={() => setResetOpen(false)}>
-              Отмена
-            </Button>
-            <Button
-              onClick={() => {
-                resetDemo();
-                setDraft("Администратор");
-                setError(null);
-                setResetOpen(false);
-              }}
-            >
-              Вернуть пример
-            </Button>
-          </div>
+          <section className="glass overflow-hidden">
+            <SectionHeading>Система</SectionHeading>
+            <dl>
+              {systemRows.map(([label, value]) => (
+                <div
+                  key={label}
+                  className="grid gap-1 border-b border-line px-4 py-3 last:border-b-0 sm:grid-cols-[11rem_minmax(0,1fr)] sm:items-baseline"
+                >
+                  <dt className="text-sm text-muted">{label}</dt>
+                  <dd className="text-sm text-ink">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
+          <section className="glass overflow-hidden">
+            <SectionHeading>Журнал</SectionHeading>
+            {audit.length === 0 ? (
+              <p className="px-4 py-4 text-sm text-muted">Записей пока нет.</p>
+            ) : (
+              <ul>
+                {audit.map((entry) => (
+                  <li
+                    key={entry.id}
+                    className="grid gap-1 border-b border-line px-4 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-baseline"
+                  >
+                    <p className="truncate text-sm text-ink">
+                      {auditLabels[entry.action] ?? "Операция"}
+                      {entry.target ? <span className="text-muted"> · {entry.target}</span> : null}
+                    </p>
+                    <p className="text-xs text-muted">{formatDateTime(entry.createdAt)}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </div>
-      </Dialog>
+      </div>
     </div>
   );
 }
 
-function SectionHeading({ code, children }: { code: string; children: string }) {
+function SectionHeading({ children }: { children: string }) {
   return (
-    <div className="flex items-center justify-between border-b border-line px-5 py-3">
+    <div className="border-b border-line px-5 py-3">
       <h2 className="text-sm font-medium text-ink">{children}</h2>
-      <span className="text-xs font-medium text-accent">{code}</span>
     </div>
   );
 }

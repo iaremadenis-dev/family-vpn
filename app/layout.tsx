@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { DemoProvider } from "@/components/demo-provider";
 import { ThemeProvider } from "@/components/theme-provider";
 import { THEME_STORAGE_KEY } from "@/lib/theme";
 import "./globals.css";
@@ -23,7 +22,7 @@ export const metadata: Metadata = {
     template: "%s · Family VPN",
   },
   description:
-    "Family VPN — админ-панель для управления VPN-серверами WireGuard. Демонстрационный интерфейс без подключения к серверам.",
+    "Family VPN — админ-панель одного администратора для серверов WireGuard.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -35,9 +34,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full font-sans text-ink">
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        <ThemeProvider>
-          <DemoProvider>{children}</DemoProvider>
-        </ThemeProvider>
+        <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
   );
