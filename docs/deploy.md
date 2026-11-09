@@ -77,6 +77,8 @@ curl -fsSL https://panel.example.com/releases/install.sh -o /tmp/fvpn-install.sh
 
 Установщик сам скачает агент с того же origin и сверит `SHA256SUMS`. Ручное копирование файлов и ручной подсчёт хеша агента не нужны. Существующий `/etc/wireguard/wg0.conf` не перезаписывается.
 
+Обычный HTTP агент и установщик принимают только для `127.0.0.1` и `localhost`. Это путь проверки через SSH-туннель, описанный в `docs/vps-connect.md`. Адрес удалённой панели в production остаётся `https://`.
+
 ## Проверки до боевого VPS
 
 ```bash

@@ -3,7 +3,13 @@ import type { NextRequest } from "next/server";
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (pathname === "/login" || pathname.startsWith("/api/agent/")) return NextResponse.next();
+  if (
+    pathname === "/login" ||
+    pathname.startsWith("/api/agent/") ||
+    pathname.startsWith("/releases/")
+  ) {
+    return NextResponse.next();
+  }
 
   const session = request.cookies.get("family_vpn_session")?.value;
   if (!session) {

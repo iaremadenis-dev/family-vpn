@@ -1,7 +1,9 @@
 #!/bin/bash
 # Family VPN installer 0.3.0
 # Downloads the agent only from the panel origin and verifies SHA-256 before install.
-# Does not pipe an unverified remote script into a privileged shell by itself.
+# Plain HTTP is accepted only for 127.0.0.1 and localhost (SSH tunnel).
+# A remote panel must use HTTPS. This script does not pipe an unverified
+# remote script into a privileged shell by itself.
 set -euo pipefail
 umask 077
 
@@ -18,6 +20,7 @@ CREATED_WG=0
 TMP_KEYS=""
 TMP_DIR=""
 BACKUP_DIR=""
+WG_FILE=""
 
 die() {
   echo "family-vpn-install: $*" >&2
@@ -55,13 +58,143 @@ self_check() {
 
 normalize_backend() {
   BACKEND=${BACKEND%/}
+  local scheme rest host port
   case "$BACKEND" in
-    https://*|http://*) ;;
-    *) die "backend must start with http:// or https://" ;;
+    https://*) scheme=https; rest=${BACKEND#https://} ;;
+    http://*) scheme=http; rest=${BACKEND#http://} ;;
+    *) die "backend must start with https:// (http:// is only allowed for 127.0.0.1 or localhost)" ;;
+  esac
+  case "$rest" in
+    ""|*/*|*"@"*|*"?"*|*"#"*|*" "*) die "backend must be an origin without a path" ;;
   esac
   case "$BACKEND" in
     *[!a-zA-Z0-9:/._~-]*) die "backend URL contains unsupported characters" ;;
   esac
+  case "$rest" in
+    *:*)
+      host=${rest%:*}
+      port=${rest##*:}
+      case "$port" in
+        ''|*[!0-9]*) die "backend port must be numeric" ;;
+      esac
+      [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "backend port is out of range"
+      ;;
+    *) host=$rest ;;
+  esac
+  [ -n "$host" ] || die "backend host is missing"
+  if [ "$scheme" = "http" ]; then
+    case "$host" in
+      127.0.0.1|localhost) ;;
+      *) die "plain HTTP is only allowed for 127.0.0.1 or localhost over a trusted tunnel; use https:// for a remote panel" ;;
+    esac
+  fi
+}
+
+wg_plan() {
+  if [ -n "$1" ] && [ -f "$1" ]; then
+    printf 'preserve\n'
+  else
+    printf 'create\n'
+  fi
+}
+
+network_cidr() {
+  local value="$1" ip prefix a b c d int mask network part
+  case "$value" in
+    *.*.*.*/*) ;;
+    *) printf '\n'; return 0 ;;
+  esac
+  ip=${value%/*}
+  prefix=${value#*/}
+  case "$prefix" in
+    ''|*[!0-9]*) printf '\n'; return 0 ;;
+  esac
+  if [ "$prefix" -gt 32 ]; then
+    printf '\n'
+    return 0
+  fi
+  IFS=. read -r a b c d <<EOF
+$ip
+EOF
+  for part in "$a" "$b" "$c" "$d"; do
+    case "$part" in
+      ''|*[!0-9]*) printf '\n'; return 0 ;;
+    esac
+    if [ "$part" -gt 255 ]; then
+      printf '\n'
+      return 0
+    fi
+  done
+  int=$(( (a << 24) + (b << 16) + (c << 8) + d ))
+  if [ "$prefix" -eq 0 ]; then
+    mask=0
+  else
+    mask=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
+  fi
+  network=$(( int & mask ))
+  printf '%d.%d.%d.%d/%s\n' \
+    $(( (network >> 24) & 255 )) \
+    $(( (network >> 16) & 255 )) \
+    $(( (network >> 8) & 255 )) \
+    $(( network & 255 )) \
+    "$prefix"
+}
+
+describe_wg_conf() {
+  local file="$1"
+  [ -n "$file" ] || die "pass a WireGuard config path"
+  [ -f "$file" ] || die "wireguard config not found"
+  local port="" address="" peers=0 private=0 postup=0 postdown=0
+  local section="" line trimmed key value rules=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    trimmed=$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    case "$trimmed" in
+      "[Interface]") section=interface; continue ;;
+      "[Peer]") section=peer; peers=$((peers + 1)); continue ;;
+      "["*) section=other; continue ;;
+    esac
+    case "$trimmed" in
+      *=*) ;;
+      *) continue ;;
+    esac
+    key=$(printf '%s' "${trimmed%%=*}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    value=$(printf '%s' "${trimmed#*=}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/[[:space:]]*#.*$//')
+    case "$key" in
+      privatekey) private=1 ;;
+      listenport) [ "$section" = "interface" ] && port=$value ;;
+      address) [ "$section" = "interface" ] && [ -z "$address" ] && address=$value ;;
+      postup)
+        if [ "$section" = "interface" ]; then
+          postup=$((postup + 1))
+          rules="${rules}rule_postup=${value}"$'\n'
+        fi
+        ;;
+      postdown)
+        if [ "$section" = "interface" ]; then
+          postdown=$((postdown + 1))
+          rules="${rules}rule_postdown=${value}"$'\n'
+        fi
+        ;;
+    esac
+  done < "$file"
+  local subnet=""
+  if [ -n "$address" ]; then
+    subnet=$(network_cidr "$address")
+  fi
+  echo "action=preserve"
+  echo "listen_port=${port}"
+  echo "address=${address}"
+  echo "subnet=${subnet}"
+  echo "peers=${peers}"
+  if [ "$private" -eq 1 ]; then
+    echo "private_key=present"
+  else
+    echo "private_key=missing"
+  fi
+  echo "postup=${postup}"
+  echo "postdown=${postdown}"
+  printf '%s' "$rules"
 }
 
 is_hex64() {
@@ -149,6 +282,9 @@ while [ "$#" -gt 0 ]; do
     --self-check) MODE="self-check"; shift ;;
     --preflight) MODE="preflight"; shift ;;
     --check) MODE="check"; shift ;;
+    --normalize) MODE="normalize"; shift ;;
+    --describe-wg) MODE="describe-wg"; WG_FILE=${2:-}; shift 2 ;;
+    --plan-wg) MODE="plan-wg"; WG_FILE=${2:-}; shift 2 ;;
     *) die "unknown argument" ;;
   esac
 done
@@ -160,6 +296,24 @@ fi
 
 if [ "$MODE" = "preflight" ]; then
   preflight
+  exit 0
+fi
+
+if [ "$MODE" = "describe-wg" ]; then
+  describe_wg_conf "$WG_FILE"
+  exit 0
+fi
+
+if [ "$MODE" = "plan-wg" ]; then
+  [ -n "$WG_FILE" ] || die "pass a WireGuard config path"
+  printf 'action=%s\n' "$(wg_plan "$WG_FILE")"
+  exit 0
+fi
+
+if [ "$MODE" = "normalize" ]; then
+  [ -n "$BACKEND" ] || die "pass --backend https://panel.example"
+  normalize_backend
+  printf '%s\n' "$BACKEND"
   exit 0
 fi
 
@@ -215,8 +369,10 @@ install -m 755 "$BINARY" /usr/local/bin/family-vpn-agent
 installed=$(sha256sum /usr/local/bin/family-vpn-agent | awk '{print $1}')
 [ "$installed" = "$SHA256" ] || die "installed agent checksum mismatch"
 
-if [ -f /etc/wireguard/wg0.conf ]; then
+if [ "$(wg_plan /etc/wireguard/wg0.conf)" = "preserve" ]; then
+  describe_wg_conf /etc/wireguard/wg0.conf
   echo "family-vpn-install: existing wg0 left unchanged"
+  echo "family-vpn-install: server key, peers, listen port, subnet, and network rules were not modified"
 else
   require_cmd apt-get
   export DEBIAN_FRONTEND=noninteractive

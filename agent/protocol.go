@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -167,12 +169,53 @@ func (c *Client) HeartbeatRetry(ctx context.Context, report Report, attempts int
 	return last
 }
 
+func normalizeBackend(raw string) (string, error) {
+	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil {
+		return "", errors.New("backend URL is invalid")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", errors.New("backend URL must be an origin without a path")
+	}
+	if port := parsed.Port(); port != "" {
+		number, conv := strconv.Atoi(port)
+		if conv != nil || number < 1 || number > 65535 {
+			return "", errors.New("backend port is invalid")
+		}
+	}
+	switch parsed.Scheme {
+	case "https":
+		return parsed.Scheme + "://" + parsed.Host, nil
+	case "http":
+		if !loopbackHost(parsed.Hostname()) {
+			return "", errors.New("plain HTTP is only allowed for 127.0.0.1 or localhost")
+		}
+		return parsed.Scheme + "://" + parsed.Host, nil
+	default:
+		return "", errors.New("backend must use https")
+	}
+}
+
+func loopbackHost(host string) bool {
+	switch strings.ToLower(host) {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *Client) post(ctx context.Context, path string, token string, payload any, dest any) (int, error) {
+	base, err := normalizeBackend(c.BaseURL)
+	if err != nil {
+		return 0, err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return 0, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}

@@ -7,6 +7,23 @@ VERSION=${VERSION:-0.3.0}
 OUT="$ROOT/releases"
 PUBLIC_URL=${FAMILY_VPN_PUBLIC_URL:-https://panel.example.com}
 PUBLIC_URL=${PUBLIC_URL%/}
+case "$PUBLIC_URL" in
+  https://*|http://127.0.0.1|http://127.0.0.1:*|http://localhost|http://localhost:*) ;;
+  http://*)
+    echo "FAMILY_VPN_PUBLIC_URL: plain HTTP is only allowed for 127.0.0.1 or localhost" >&2
+    exit 1
+    ;;
+  *)
+    echo "FAMILY_VPN_PUBLIC_URL must start with https://" >&2
+    exit 1
+    ;;
+esac
+case "${PUBLIC_URL#*://}" in
+  ""|*/*|*"@"*|*"?"*|*"#"*)
+    echo "FAMILY_VPN_PUBLIC_URL must be an origin without a path" >&2
+    exit 1
+    ;;
+esac
 AGENT_NAME=family-vpn-agent-linux-amd64
 
 mkdir -p "$OUT"
@@ -66,9 +83,10 @@ Preferred one-line install (checksum of install.sh is pinned; no manual hashing)
 
 ${ONE_COMMAND}
 
-install.sh then downloads ${AGENT_NAME} from the same HTTPS origin and verifies SHA256SUMS before changing the system.
+install.sh then downloads ${AGENT_NAME} from the same origin and verifies SHA256SUMS before changing the system.
+Remote panels require HTTPS. Plain HTTP is accepted only for 127.0.0.1 or localhost through a trusted SSH tunnel.
 
-Convenience bootstrap from the same origin (trust root = your TLS certificate):
+Convenience bootstrap from the same origin:
 
 curl -fsSL ${PUBLIC_URL}/releases/bootstrap.sh | sudo bash
 

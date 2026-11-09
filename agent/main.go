@@ -56,6 +56,11 @@ func runEnroll(args []string) int {
 		fmt.Fprintln(os.Stderr, "backend URL is required")
 		return 2
 	}
+	normalized, err := normalizeBackend(*backend)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 2
+	}
 	state, err := loadOrCreate(*data)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "state error")
@@ -72,7 +77,7 @@ func runEnroll(args []string) int {
 			return 1
 		}
 	}
-	client := clientFrom(state, *backend)
+	client := clientFrom(state, normalized)
 	if err := client.Enroll(context.Background(), state.Code, localReport()); err != nil {
 		fmt.Fprintln(os.Stderr, "panel did not accept enrollment")
 		return 1
@@ -114,12 +119,17 @@ func runLoop(args []string) int {
 		fmt.Fprintln(os.Stderr, "backend URL is required")
 		return 2
 	}
+	normalized, err := normalizeBackend(*backend)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 2
+	}
 	state, err := loadState(*data)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "state error")
 		return 1
 	}
-	client := clientFrom(state, *backend)
+	client := clientFrom(state, normalized)
 	ctx := context.Background()
 	if client.Token == "" {
 		if client.EnrollmentID == "" || client.Nonce == "" {

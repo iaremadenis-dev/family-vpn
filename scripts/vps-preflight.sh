@@ -44,7 +44,19 @@ echo "Before install: sudo cp -a /etc/wireguard /root/wireguard-backup-\$(date -
 
 if [ -n "$BACKEND" ]; then
   echo "== Panel =="
-  curl -fsSIL "${BACKEND%/}/releases/SHA256SUMS" >/dev/null
+  BACKEND=${BACKEND%/}
+  case "$BACKEND" in
+    https://*|http://127.0.0.1|http://127.0.0.1:*|http://localhost|http://localhost:*) ;;
+    http://*)
+      echo "plain HTTP is only allowed for 127.0.0.1 or localhost" >&2
+      exit 1
+      ;;
+    *)
+      echo "backend must start with https://" >&2
+      exit 1
+      ;;
+  esac
+  curl -fsSIL "${BACKEND}/releases/SHA256SUMS" >/dev/null
   echo "releases endpoint reachable"
 fi
 
