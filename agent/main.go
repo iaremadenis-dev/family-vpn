@@ -35,7 +35,7 @@ func main() {
 		os.Exit(runLoop(os.Args[2:]))
 	case "code":
 		os.Exit(printCode(os.Args[2:]))
-	case "version":
+	case "version", "--version", "-version":
 		fmt.Println(agentVersion)
 		os.Exit(0)
 	default:
@@ -45,7 +45,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: family-vpn-agent enroll|run|code|version --backend URL --data DIR")
+	fmt.Fprintln(os.Stderr, "usage: family-vpn-agent enroll|run|code|version|--version --backend URL --data DIR")
 }
 
 func runEnroll(args []string) int {

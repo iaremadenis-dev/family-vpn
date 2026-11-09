@@ -8,7 +8,8 @@
 set -euo pipefail
 umask 077
 
-VERSION="0.4.0"
+# Must not be named VERSION: sourcing /etc/os-release overwrites VERSION with Ubuntu's field.
+AGENT_VERSION="0.4.0"
 BACKEND=""
 BINARY=""
 SHA256=""
@@ -56,7 +57,15 @@ self_check() {
   got=$(printf 'family-vpn' | sha256sum | awk '{print $1}')
   again=$(printf 'family-vpn' | sha256sum | awk '{print $1}')
   [ "$got" = "$again" ] || die "checksum helper failed"
-  echo "family-vpn-install $VERSION self-check ok"
+  echo "family-vpn-install $AGENT_VERSION self-check ok"
+}
+
+assert_ubuntu_2404() {
+  # Read os-release in a subshell so ID/VERSION* never clobber installer globals.
+  local id version_id
+  id=$(. /etc/os-release; printf '%s' "${ID:-}")
+  version_id=$(. /etc/os-release; printf '%s' "${VERSION_ID:-}")
+  [ "$id" = "ubuntu" ] && [ "$version_id" = "24.04" ] || die "Ubuntu 24.04 is required"
 }
 
 normalize_backend() {
@@ -295,11 +304,25 @@ rollback_agent_binary() {
   fi
 }
 
+read_agent_version() {
+  local out=""
+  out=$("$AGENT_BIN" --version 2>/dev/null | head -n 1 | tr -d '\r')
+  if [ -z "$out" ]; then
+    out=$("$AGENT_BIN" version 2>/dev/null | head -n 1 | tr -d '\r')
+  fi
+  printf '%s' "$out"
+}
+
 verify_agent_running() {
-  local version=""
+  local version="" pid=""
   systemctl is-active --quiet family-vpn-agent || return 1
-  version=$("$AGENT_BIN" version 2>/dev/null || true)
-  [ "$version" = "$VERSION" ] || return 1
+  pid=$(systemctl show -p MainPID --value family-vpn-agent 2>/dev/null || true)
+  case "$pid" in
+    ''|0) return 1 ;;
+  esac
+  [ -d "/proc/$pid" ] || return 1
+  version=$(read_agent_version)
+  [ "$version" = "$AGENT_VERSION" ] || return 1
   return 0
 }
 
@@ -345,7 +368,7 @@ update_paired_agent() {
   done
   if ! verify_agent_running; then
     rollback_agent_binary
-    die "new agent did not stay active at version $VERSION; rolled back"
+    die "new agent did not stay active at version $AGENT_VERSION; rolled back"
   fi
 
   local wg_after state_after
@@ -354,16 +377,15 @@ update_paired_agent() {
   [ "$wg_before" = "$wg_after" ] || die "wg0.conf changed during update; unexpected"
   [ "$state_before" = "$state_after" ] || die "agent.json changed during update; unexpected"
 
-  echo "family-vpn-install: update to $VERSION complete"
+  echo "family-vpn-install: update to $AGENT_VERSION complete"
   echo "family-vpn-install: pairing token and WireGuard config preserved"
-  "$AGENT_BIN" version
+  "$AGENT_BIN" --version
 }
 
 preflight() {
   [ "$(id -u)" -eq 0 ] || die "run as root"
   [ -r /etc/os-release ] || die "cannot detect the operating system"
-  . /etc/os-release
-  [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] || die "Ubuntu 24.04 is required"
+  assert_ubuntu_2404
   require_cmd ip
   require_cmd sha256sum
   if [ -f /etc/wireguard/wg0.conf ]; then
@@ -382,7 +404,7 @@ preflight() {
     curl -fsSIL "$BACKEND/releases/SHA256SUMS" >/dev/null
     echo "family-vpn-install: panel releases endpoint is reachable"
   fi
-  echo "family-vpn-install $VERSION preflight ok"
+  echo "family-vpn-install $AGENT_VERSION preflight ok"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -468,14 +490,13 @@ got=$(sha256sum "$BINARY" | awk '{print $1}')
 echo "family-vpn-install: agent binary checksum matches"
 
 if [ "$MODE" = "check" ]; then
-  echo "family-vpn-install $VERSION checksum ok"
+  echo "family-vpn-install $AGENT_VERSION checksum ok"
   exit 0
 fi
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [ -r /etc/os-release ] || die "cannot detect the operating system"
-. /etc/os-release
-[ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] || die "Ubuntu 24.04 is required"
+assert_ubuntu_2404
 require_cmd ip
 
 if [ "$MODE" = "update" ]; then

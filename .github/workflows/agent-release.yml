@@ -47,6 +47,7 @@ jobs:
         run: |
           (cd releases && sha256sum -c SHA256SUMS)
           chmod +x releases/family-vpn-agent-linux-amd64
+          test "$(releases/family-vpn-agent-linux-amd64 --version)" = "0.4.0"
           test "$(releases/family-vpn-agent-linux-amd64 version)" = "0.4.0"
           grep -F -- '--update' releases/INSTALL.txt
           cat releases/SHA256SUMS
