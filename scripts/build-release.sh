@@ -75,6 +75,7 @@ EOF
 chmod 0755 "$OUT/bootstrap.sh"
 
 ONE_COMMAND="curl -fsSL ${PUBLIC_URL}/releases/install.sh -o /tmp/fvpn-install.sh && echo '${INSTALL_SHA}  /tmp/fvpn-install.sh' | sha256sum -c - && sudo bash /tmp/fvpn-install.sh --backend ${PUBLIC_URL}"
+UPDATE_COMMAND="curl -fsSL ${PUBLIC_URL}/releases/install.sh -o /tmp/fvpn-install.sh && echo '${INSTALL_SHA}  /tmp/fvpn-install.sh' | sha256sum -c - && sudo bash /tmp/fvpn-install.sh --backend ${PUBLIC_URL} --update"
 
 cat > "$OUT/INSTALL.txt" <<EOF
 Family VPN agent release $VERSION
@@ -82,6 +83,10 @@ Family VPN agent release $VERSION
 Preferred one-line install (checksum of install.sh is pinned; no manual hashing):
 
 ${ONE_COMMAND}
+
+Safe one-line update for an already paired agent (keeps agent.json, wg0.conf, peers, keys, NAT):
+
+${UPDATE_COMMAND}
 
 install.sh then downloads ${AGENT_NAME} from the same origin and verifies SHA256SUMS before changing the system.
 Remote panels require HTTPS. Plain HTTP is accepted only for 127.0.0.1 or localhost through a trusted SSH tunnel.
@@ -95,6 +100,7 @@ Offline form after copying releases/ to the VPS:
 sudo bash install.sh --backend ${PUBLIC_URL} --binary ./${AGENT_NAME} --sha256 ${AGENT_SHA}
 
 Existing wg0.conf is left unchanged. A backup is written under /var/lib/family-vpn/backups/.
+--update also backs up the previous agent binary and rolls back if the new service fails.
 
 Checksums:
 $(cat "$OUT/SHA256SUMS")
@@ -103,3 +109,5 @@ EOF
 echo "release $VERSION written to $OUT"
 echo "one command:"
 echo "$ONE_COMMAND"
+echo "update command:"
+echo "$UPDATE_COMMAND"

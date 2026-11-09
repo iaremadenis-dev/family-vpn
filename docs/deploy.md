@@ -48,7 +48,13 @@ docker compose up -d --build
 
 ## Публикация агента
 
-На машине со установленным Go:
+Предпочтительно GitHub Actions `agent-release`: на Linux выполняются `go test ./...`, сборка amd64 и загрузка artifact `family-vpn-agent-0.4.0`. Локально на Windows:
+
+```powershell
+powershell -File scripts/fetch-agent-release.ps1
+```
+
+Либо на машине с Go:
 
 ```bash
 export FAMILY_VPN_PUBLIC_URL=https://panel.example.com
@@ -61,7 +67,7 @@ bash scripts/build-release.sh
 - `install.sh`
 - `SHA256SUMS`
 - `bootstrap.sh`
-- `INSTALL.txt` с готовой однострочной командой
+- `INSTALL.txt` с командами install и `--update`
 
 Каталог `releases/` монтируется в Caddy как `/releases/`. Бинарники в Git не коммитятся.
 

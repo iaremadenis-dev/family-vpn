@@ -22,6 +22,8 @@ TMP_KEYS=""
 TMP_DIR=""
 BACKUP_DIR=""
 WG_FILE=""
+AGENT_BIN="/usr/local/bin/family-vpn-agent"
+AGENT_BACKUP=""
 
 die() {
   echo "family-vpn-install: $*" >&2
@@ -245,6 +247,118 @@ backup_wireguard() {
   echo "family-vpn-install: WireGuard backup saved"
 }
 
+write_agent_unit() {
+  cat > /etc/systemd/system/family-vpn-agent.service <<EOF
+[Unit]
+Description=Family VPN Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$AGENT_BIN run --backend $BACKEND --data $DATA_DIR
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+assert_paired_state() {
+  local state="$DATA_DIR/agent.json"
+  [ -f "$AGENT_BIN" ] || die "current agent binary not found; use install, not --update"
+  [ -f "$state" ] || die "agent state not found; refuse update without pairing identity"
+  # Paired agents keep a non-empty token. Do not print secrets.
+  grep -q '"token"[[:space:]]*:[[:space:]]*"[^"][^"]*"' "$state" \
+    || die "agent is not paired; refuse --update (no re-pair in update mode)"
+  [ -f /etc/wireguard/wg0.conf ] || die "wg0.conf missing; refuse update that could alter networking assumptions"
+}
+
+backup_agent_binary() {
+  BACKUP_DIR="$DATA_DIR/backups"
+  install -d -m 700 "$BACKUP_DIR"
+  local stamp
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  AGENT_BACKUP="$BACKUP_DIR/family-vpn-agent.$stamp"
+  install -m 755 "$AGENT_BIN" "$AGENT_BACKUP"
+  echo "family-vpn-install: agent binary backup saved"
+}
+
+rollback_agent_binary() {
+  if [ -n "$AGENT_BACKUP" ] && [ -f "$AGENT_BACKUP" ]; then
+    install -m 755 "$AGENT_BACKUP" "$AGENT_BIN"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl restart family-vpn-agent >/dev/null 2>&1 || true
+    echo "family-vpn-install: rolled back to previous agent binary" >&2
+  fi
+}
+
+verify_agent_running() {
+  local version=""
+  systemctl is-active --quiet family-vpn-agent || return 1
+  version=$("$AGENT_BIN" version 2>/dev/null || true)
+  [ "$version" = "$VERSION" ] || return 1
+  return 0
+}
+
+update_paired_agent() {
+  require_cmd systemctl
+  assert_paired_state
+  install -d -m 700 "$DATA_DIR"
+  backup_wireguard
+  backup_agent_binary
+
+  local wg_before state_before
+  wg_before=$(sha256sum /etc/wireguard/wg0.conf | awk '{print $1}')
+  state_before=$(sha256sum "$DATA_DIR/agent.json" | awk '{print $1}')
+
+  echo "family-vpn-install: updating paired agent in place (no enroll, wg0 untouched)"
+  systemctl stop family-vpn-agent >/dev/null 2>&1 || true
+
+  if ! install -m 755 "$BINARY" "$AGENT_BIN"; then
+    rollback_agent_binary
+    die "failed to install new agent binary"
+  fi
+  installed=$(sha256sum "$AGENT_BIN" | awk '{print $1}')
+  if [ "$installed" != "$SHA256" ]; then
+    rollback_agent_binary
+    die "installed agent checksum mismatch after update"
+  fi
+
+  write_agent_unit
+  systemctl daemon-reload
+  systemctl enable family-vpn-agent >/dev/null
+  if ! systemctl restart family-vpn-agent; then
+    rollback_agent_binary
+    die "new agent service failed to restart"
+  fi
+
+  local attempt=0
+  while [ "$attempt" -lt 10 ]; do
+    if verify_agent_running; then
+      break
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  if ! verify_agent_running; then
+    rollback_agent_binary
+    die "new agent did not stay active at version $VERSION; rolled back"
+  fi
+
+  local wg_after state_after
+  wg_after=$(sha256sum /etc/wireguard/wg0.conf | awk '{print $1}')
+  state_after=$(sha256sum "$DATA_DIR/agent.json" | awk '{print $1}')
+  [ "$wg_before" = "$wg_after" ] || die "wg0.conf changed during update; unexpected"
+  [ "$state_before" = "$state_after" ] || die "agent.json changed during update; unexpected"
+
+  echo "family-vpn-install: update to $VERSION complete"
+  echo "family-vpn-install: pairing token and WireGuard config preserved"
+  "$AGENT_BIN" version
+}
+
 preflight() {
   [ "$(id -u)" -eq 0 ] || die "run as root"
   [ -r /etc/os-release ] || die "cannot detect the operating system"
@@ -284,6 +398,7 @@ while [ "$#" -gt 0 ]; do
     --preflight) MODE="preflight"; shift ;;
     --check) MODE="check"; shift ;;
     --normalize) MODE="normalize"; shift ;;
+    --update) MODE="update"; shift ;;
     --describe-wg) MODE="describe-wg"; WG_FILE=${2:-}; shift 2 ;;
     --plan-wg) MODE="plan-wg"; WG_FILE=${2:-}; shift 2 ;;
     *) die "unknown argument" ;;
@@ -363,11 +478,16 @@ fi
 [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] || die "Ubuntu 24.04 is required"
 require_cmd ip
 
+if [ "$MODE" = "update" ]; then
+  update_paired_agent
+  exit 0
+fi
+
 install -d -m 700 "$DATA_DIR"
 backup_wireguard
 install -d -m 755 /usr/local/bin
-install -m 755 "$BINARY" /usr/local/bin/family-vpn-agent
-installed=$(sha256sum /usr/local/bin/family-vpn-agent | awk '{print $1}')
+install -m 755 "$BINARY" "$AGENT_BIN"
+installed=$(sha256sum "$AGENT_BIN" | awk '{print $1}')
 [ "$installed" = "$SHA256" ] || die "installed agent checksum mismatch"
 
 if [ "$(wg_plan /etc/wireguard/wg0.conf)" = "preserve" ]; then
@@ -415,23 +535,7 @@ EOF
   echo "family-vpn-install: new wg0 configured on $iface"
 fi
 
-cat > /etc/systemd/system/family-vpn-agent.service <<EOF
-[Unit]
-Description=Family VPN Agent
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/family-vpn-agent run --backend $BACKEND --data $DATA_DIR
-Restart=on-failure
-RestartSec=5
-NoNewPrivileges=true
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+write_agent_unit
 systemctl daemon-reload
 /usr/local/bin/family-vpn-agent enroll --backend "$BACKEND" --data "$DATA_DIR"
 systemctl enable --now family-vpn-agent

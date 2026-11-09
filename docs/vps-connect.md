@@ -15,14 +15,19 @@
 
 `http://localhost` на компьютере с панелью VPS не видит. Исключение — обратный SSH-туннель: на VPS панель открывается как `http://127.0.0.1:13010`, если туннель направлен на локальный порт `3010`. Агент и установщик принимают такой HTTP только для `127.0.0.1` и `localhost`. Адрес вида `http://203.0.113.5` отклоняется. Удалённая панель без туннеля остаётся на HTTPS.
 
-Сборка релиза для этого туннеля — в Windows PowerShell из каталога проекта. Нужны Go и Git Bash; `bash` здесь — программа Git, не команда Ubuntu:
+Сборка Linux-агента и `go test ./...` выполняются в GitHub Actions (`.github/workflows/agent-release.yml`). На Windows Go не нужен.
+
+После успешного workflow в PowerShell из каталога проекта:
 
 ```powershell
-$env:FAMILY_VPN_PUBLIC_URL = "http://127.0.0.1:13010"
-& "C:\Program Files\Git\bin\bash.exe" scripts/build-release.sh
+winget install --id GitHub.cli -e --accept-package-agreements --accept-source-agreements
+gh auth login
+powershell -File scripts/fetch-agent-release.ps1
 ```
 
-Готовая команда для Ubuntu после этого лежит в `releases/INSTALL.txt`. Её выполняют на VPS, не в Windows.
+Скрипт кладёт артефакты в `releases/` для `http://localhost:3010/releases/*` и туннеля `http://127.0.0.1:13010/releases/*`.
+
+Готовая команда для Ubuntu — в `releases/INSTALL.txt`. Для уже привязанного VPS используйте строку с `--update` (без повторного enroll). Её выполняют на VPS, не в Windows.
 
 ## Шаг 1. Только чтение
 

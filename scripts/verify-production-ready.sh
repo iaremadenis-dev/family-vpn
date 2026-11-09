@@ -15,10 +15,12 @@ test -f scripts/build-release.sh
 
 bash -n installer/install.sh
 bash -n installer/preserve-wg.test.sh
+bash -n installer/update-mode.test.sh
 bash -n scripts/build-release.sh
 bash -n scripts/import-panel-data.sh
 bash -n scripts/vps-preflight.sh
 bash installer/preserve-wg.test.sh
+bash installer/update-mode.test.sh
 
 if [ -f releases/SHA256SUMS ]; then
   (cd releases && sha256sum -c SHA256SUMS)
