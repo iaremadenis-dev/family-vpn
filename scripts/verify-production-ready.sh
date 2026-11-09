@@ -19,6 +19,9 @@ bash -n installer/update-mode.test.sh
 bash -n scripts/build-release.sh
 bash -n scripts/import-panel-data.sh
 bash -n scripts/vps-preflight.sh
+bash -n panel/install-panel.sh
+bash -n panel/renew-cert.sh
+bash panel/install-panel.test.sh
 bash installer/preserve-wg.test.sh
 bash installer/update-mode.test.sh
 bash installer/onboarding.test.sh

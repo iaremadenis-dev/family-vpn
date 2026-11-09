@@ -1,0 +1,12 @@
+{
+	auto_https off
+	admin off
+}
+
+http://__PANEL_IP__ {
+	handle /.well-known/acme-challenge/* {
+		root * /acme
+		file_server
+	}
+	respond "family-vpn panel is waiting for a certificate" 503
+}

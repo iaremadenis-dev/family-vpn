@@ -1,0 +1,29 @@
+{
+	auto_https off
+	admin off
+}
+
+http://__PANEL_IP__ {
+	handle /.well-known/acme-challenge/* {
+		root * /acme
+		file_server
+	}
+	redir https://__PANEL_IP__{uri} permanent
+}
+
+https://__PANEL_IP__ {
+	tls /certs/fullchain.pem /certs/privkey.pem
+	encode gzip
+
+	handle_path /releases/* {
+		root * /srv/releases
+		file_server {
+			hide .*
+		}
+		header Cache-Control "public, max-age=300"
+	}
+
+	handle {
+		reverse_proxy panel:3000
+	}
+}

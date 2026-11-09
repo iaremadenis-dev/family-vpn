@@ -1,0 +1,39 @@
+# Panel stack for a public IP certificate issued by Certbot.
+# The domain stack remains deploy/docker-compose.yml.
+name: family-vpn
+
+services:
+  panel:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - /etc/family-vpn/panel.env
+    volumes:
+      - /var/lib/family-vpn/panel:/data
+    expose:
+      - "3000"
+    networks:
+      - family-vpn
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    # Root inside the container so the private key can stay mode 600 on the host.
+    user: "0:0"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /etc/family-vpn/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /var/lib/family-vpn/certs:/certs:ro
+      - /var/lib/family-vpn/acme:/acme:ro
+      - ../releases:/srv/releases:ro
+    depends_on:
+      - panel
+    networks:
+      - family-vpn
+
+networks:
+  family-vpn:
