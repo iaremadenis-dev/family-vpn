@@ -54,3 +54,28 @@ export type ConfigRecord = {
   clientPublicKey: string;
   endpoint: string;
 };
+
+export type InstallCommandInfo = {
+  backendUrl: string;
+  installCommand: string | null;
+  updateCommand: string | null;
+  installSha256: string | null;
+  agentSha256: string | null;
+  ready: boolean;
+  tunnelHint: boolean;
+  missing: string[];
+};
+
+export type ClaimedServerSummary = {
+  serverId: string;
+  name: string;
+  location: string;
+  endpoint: string;
+  listenPort: number;
+  vpnSubnet: string | null;
+  wgPublicKey: string | null;
+  externalInterface: string | null;
+  agentVersion: string | null;
+  wgUp: boolean;
+  readyForConfigs: boolean;
+};

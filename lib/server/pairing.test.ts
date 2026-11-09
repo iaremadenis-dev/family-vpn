@@ -209,11 +209,30 @@ describe("pairing", { concurrency: 1 }, () => {
     const first = generatePairingCode();
     const second = generatePairingCode();
     enroll(first);
-    enroll(second, { ...report, endpoint: "203.0.113.11", listenPort: 51821 });
+    enroll(second, {
+      ...report,
+      endpoint: "203.0.113.11",
+      listenPort: 51821,
+      subnet: "10.201.0.0/24",
+      publicKey: `${"B".repeat(43)}=`,
+    });
     claimPairingCode({ name: "One", location: "A", code: first, subjectHash: "multi" });
     claimPairingCode({ name: "Two", location: "B", code: second, subjectHash: "multi" });
     const count = getDb().prepare("SELECT COUNT(*) AS count FROM servers").get();
     assert.equal(Number(count?.count), 2);
+  });
+
+  test("rejects conflicting vpn subnets across servers", () => {
+    reset();
+    const first = generatePairingCode();
+    const second = generatePairingCode();
+    enroll(first);
+    enroll(second, { ...report, endpoint: "203.0.113.12", listenPort: 51822 });
+    claimPairingCode({ name: "One", location: "A", code: first, subjectHash: "subnet" });
+    assert.throws(
+      () => claimPairingCode({ name: "Two", location: "B", code: second, subjectHash: "subnet" }),
+      /VPN-подсеть/,
+    );
   });
 
   test("stops repeated wrong codes", () => {

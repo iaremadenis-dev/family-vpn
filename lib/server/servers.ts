@@ -21,6 +21,20 @@ export async function listServers(): Promise<ServerRecord[]> {
   return rows.map(mapServer);
 }
 
+export async function getServer(id: string): Promise<ServerRecord | null> {
+  await requireAdmin();
+  assertId(id);
+  const row = getDb()
+    .prepare(
+      `SELECT servers.*, agents.server_id AS agent_server_id, agents.revoked_at AS agent_revoked_at
+       FROM servers
+       LEFT JOIN agents ON agents.server_id = servers.id
+       WHERE servers.id = ?`,
+    )
+    .get(id);
+  return row ? mapServer(row) : null;
+}
+
 export async function createServer(input: ServerInput): Promise<ServerRecord> {
   await requireAdmin();
   const value = validateServer(input);

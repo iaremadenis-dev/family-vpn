@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { ServersView } from "@/components/servers-view";
+import { getInstallCommandInfo } from "@/lib/server/install-command";
 import { listServers } from "@/lib/server/servers";
 
 export const metadata: Metadata = {
@@ -16,6 +17,6 @@ export default function ServersPage() {
 }
 
 async function ServersData() {
-  const servers = await listServers();
-  return <ServersView servers={servers} />;
+  const [servers, install] = await Promise.all([listServers(), getInstallCommandInfo()]);
+  return <ServersView servers={servers} install={install} />;
 }

@@ -21,6 +21,7 @@ bash -n scripts/import-panel-data.sh
 bash -n scripts/vps-preflight.sh
 bash installer/preserve-wg.test.sh
 bash installer/update-mode.test.sh
+bash installer/onboarding.test.sh
 
 if [ -f releases/SHA256SUMS ]; then
   (cd releases && sha256sum -c SHA256SUMS)

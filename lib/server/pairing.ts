@@ -14,6 +14,7 @@ import {
 } from "@/lib/server/agent-jobs";
 import { getDb } from "@/lib/server/db";
 import { UserError } from "@/lib/server/errors";
+import type { ClaimedServerSummary } from "@/lib/types";
 
 export const PAIRING_TTL_MS = 15 * 60 * 1000;
 export const HEARTBEAT_FRESH_MS = 45 * 1000;
@@ -176,12 +177,14 @@ export function pollEnrollment(
   return { status: "paired" };
 }
 
+export type { ClaimedServerSummary };
+
 export function claimPairingCode(input: {
   name: string;
   location: string;
   code: string;
   subjectHash: string;
-}): { serverId: string; name: string } {
+}): ClaimedServerSummary {
   assertAttemptAllowed("claim", input.subjectHash, 8);
   const name = assertLabel(input.name, "Укажите название.", 64);
   const location = assertLabel(input.location, "Укажите расположение.", 80);
@@ -215,11 +218,24 @@ export function claimPairingCode(input: {
     .get(report.endpoint, report.listenPort);
   if (duplicate) throw new UserError("Сервер с таким адресом и портом уже есть.");
 
+  if (report.subnet) {
+    const subnetConflict = db
+      .prepare("SELECT name FROM servers WHERE vpn_subnet = ? LIMIT 1")
+      .get(report.subnet);
+    if (subnetConflict) {
+      throw new UserError(
+        `VPN-подсеть ${report.subnet} уже используется сервером «${String(subnetConflict.name)}». Выберите другую подсеть на новом VPS.`,
+      );
+    }
+  }
+
   const serverId = randomUUID();
   const token = randomBytes(32).toString("base64url");
   const now = new Date().toISOString();
   const count = db.prepare("SELECT COUNT(*) AS count FROM servers").get();
   const isDefault = Number(count?.count ?? 0) === 0;
+  const agentVersion = String(enrollment.version);
+  const wgUp = Boolean(report.interfaceUp);
 
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -240,14 +256,14 @@ export function claimPairingCode(input: {
       report.publicKey || null,
       report.subnet || null,
       report.externalInterface || null,
-      String(enrollment.version),
-      report.interfaceUp ? 1 : 0,
+      agentVersion,
+      wgUp ? 1 : 0,
     );
     db.prepare(
       `INSERT INTO agents
         (server_id, public_key, token_hash, delivery_token, version, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(serverId, String(enrollment.public_key), sha256(token), token, String(enrollment.version), now);
+    ).run(serverId, String(enrollment.public_key), sha256(token), token, agentVersion, now);
     db.prepare("UPDATE enrollments SET claimed_at = ?, server_id = ? WHERE id = ?").run(
       now,
       serverId,
@@ -258,7 +274,20 @@ export function claimPairingCode(input: {
     db.exec("ROLLBACK");
     throw cause;
   }
-  return { serverId, name };
+
+  return {
+    serverId,
+    name,
+    location,
+    endpoint: report.endpoint,
+    listenPort: report.listenPort,
+    vpnSubnet: report.subnet || null,
+    wgPublicKey: report.publicKey || null,
+    externalInterface: report.externalInterface || null,
+    agentVersion,
+    wgUp,
+    readyForConfigs: Boolean(report.publicKey && report.subnet && wgUp),
+  };
 }
 
 export function heartbeatAgent(

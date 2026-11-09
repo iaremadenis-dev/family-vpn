@@ -15,7 +15,8 @@ BINARY=""
 SHA256=""
 RELEASE_DIR=""
 PORT="51820"
-SUBNET="10.200.0.0/24"
+SUBNET=""
+SUBNET_SET=0
 DATA_DIR="/var/lib/family-vpn"
 MODE="install"
 CREATED_WG=0
@@ -275,14 +276,64 @@ WantedBy=multi-user.target
 EOF
 }
 
-assert_paired_state() {
+agent_is_paired() {
   local state="$DATA_DIR/agent.json"
-  [ -f "$AGENT_BIN" ] || die "current agent binary not found; use install, not --update"
-  [ -f "$state" ] || die "agent state not found; refuse update without pairing identity"
+  [ -f "$state" ] || return 1
   # Paired agents keep a non-empty token. Do not print secrets.
-  grep -q '"token"[[:space:]]*:[[:space:]]*"[^"][^"]*"' "$state" \
-    || die "agent is not paired; refuse --update (no re-pair in update mode)"
+  grep -q '"token"[[:space:]]*:[[:space:]]*"[^"][^"]*"' "$state"
+}
+
+assert_paired_state() {
+  [ -f "$AGENT_BIN" ] || die "current agent binary not found; use install, not --update"
+  agent_is_paired || die "agent is not paired; refuse --update (no re-pair in update mode)"
   [ -f /etc/wireguard/wg0.conf ] || die "wg0.conf missing; refuse update that could alter networking assumptions"
+}
+
+# Pick a /24 in 10.200–10.250 that is not already used by a local route or address.
+choose_vpn_subnet() {
+  local candidate octet used
+  used=$(
+    {
+      ip -4 route show 2>/dev/null || true
+      ip -4 addr show 2>/dev/null || true
+    } | tr ' ' '\n' | grep -E '^10\.(2[0-4][0-9]|250)\.0\.0/24$' || true
+  )
+  for _try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
+    octet=$((200 + $(od -An -N1 -tu1 /dev/urandom | tr -d ' ') % 51))
+    candidate="10.${octet}.0.0/24"
+    if ! printf '%s\n' "$used" | grep -Fxq "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  # Deterministic fallback if random collisions keep hitting used ranges.
+  for octet in $(seq 200 250); do
+    candidate="10.${octet}.0.0/24"
+    if ! printf '%s\n' "$used" | grep -Fxq "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  die "could not allocate a free VPN subnet in 10.200.0.0–10.250.0.0/24"
+}
+
+post_install_check() {
+  require_cmd systemctl
+  systemctl is-active --quiet family-vpn-agent || die "agent service is not active after install"
+  local version
+  version=$("$AGENT_BIN" --version 2>/dev/null | head -n 1 | tr -d '\r')
+  [ "$version" = "$AGENT_VERSION" ] || die "agent version mismatch after install"
+  if [ -f /etc/wireguard/wg0.conf ]; then
+    if command -v wg >/dev/null; then
+      wg show wg0 >/dev/null 2>&1 || die "wg0 is not up after install"
+    fi
+  fi
+  [ -f "$DATA_DIR/agent.json" ] || die "agent state file missing after enroll"
+  # Confirm enroll created a pairing code or token without printing secrets.
+  if ! grep -qE '"pairingCode"|"token"|"enrollmentId"' "$DATA_DIR/agent.json"; then
+    die "agent state incomplete after enroll"
+  fi
+  echo "family-vpn-install: health check ok"
 }
 
 backup_agent_binary() {
@@ -414,7 +465,7 @@ while [ "$#" -gt 0 ]; do
     --sha256) SHA256=${2:-}; shift 2 ;;
     --release-dir) RELEASE_DIR=${2:-}; shift 2 ;;
     --port) PORT=${2:-}; shift 2 ;;
-    --subnet) SUBNET=${2:-}; shift 2 ;;
+    --subnet) SUBNET=${2:-}; SUBNET_SET=1; shift 2 ;;
     --data) DATA_DIR=${2:-}; shift 2 ;;
     --self-check) MODE="self-check"; shift ;;
     --preflight) MODE="preflight"; shift ;;
@@ -461,10 +512,12 @@ case "$PORT" in
   ''|*[!0-9]*) die "port must be numeric" ;;
 esac
 [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "port is out of range"
-case "$SUBNET" in
-  *.0/24) ;;
-  *) die "subnet must be an IPv4 /24, for example 10.200.0.0/24" ;;
-esac
+if [ "$SUBNET_SET" -eq 1 ]; then
+  case "$SUBNET" in
+    *.0/24) ;;
+    *) die "subnet must be an IPv4 /24, for example 10.200.0.0/24" ;;
+  esac
+fi
 
 if [ -n "$RELEASE_DIR" ]; then
   BINARY="$RELEASE_DIR/family-vpn-agent-linux-amd64"
@@ -505,6 +558,15 @@ if [ "$MODE" = "update" ]; then
 fi
 
 install -d -m 700 "$DATA_DIR"
+
+# Full reinstall is refused when the agent is already paired: use --update instead.
+if agent_is_paired; then
+  echo "family-vpn-install: agent is already paired; refusing full reinstall" >&2
+  echo "family-vpn-install: pairing identity and WireGuard were left unchanged" >&2
+  echo "family-vpn-install: run the same command with --update to replace only the agent binary" >&2
+  die "already installed; use --update"
+fi
+
 backup_wireguard
 install -d -m 755 /usr/local/bin
 install -m 755 "$BINARY" "$AGENT_BIN"
@@ -522,6 +584,10 @@ else
   apt-get install -y wireguard
   iface=$(ip -4 route show default | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
   [ -n "$iface" ] || die "could not detect the external network interface"
+  if [ "$SUBNET_SET" -eq 0 ] || [ -z "$SUBNET" ]; then
+    SUBNET=$(choose_vpn_subnet)
+    echo "family-vpn-install: selected VPN subnet $SUBNET"
+  fi
   base=${SUBNET%/*}
   address="${base%.*}.1/24"
   network="${base%.*}.0/24"
@@ -553,12 +619,13 @@ EOF
   wg-quick up wg0
   systemctl enable wg-quick@wg0
   : > "$DATA_DIR/wg-managed-by-installer"
-  echo "family-vpn-install: new wg0 configured on $iface"
+  echo "family-vpn-install: new wg0 configured on $iface ($SUBNET)"
 fi
 
 write_agent_unit
 systemctl daemon-reload
 /usr/local/bin/family-vpn-agent enroll --backend "$BACKEND" --data "$DATA_DIR"
 systemctl enable --now family-vpn-agent
+post_install_check
 echo "family-vpn-install: agent service is enabled"
 echo "family-vpn-install: enter the pairing code in Servers → Add server"

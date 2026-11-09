@@ -9,26 +9,44 @@ import { createHash } from "node:crypto";
 import { headers } from "next/headers";
 import {
   deleteServer,
+  getServer,
   setDefaultServer,
   updateServer,
 } from "@/lib/server/servers";
+import type { ClaimedServerSummary, ServerRecord } from "@/lib/types";
 
 export type ActionResult = { error: string | null };
+
+export type ClaimServerResult = ActionResult & {
+  claimed?: ClaimedServerSummary;
+};
 
 export async function claimServerAction(input: {
   name: string;
   location: string;
   code: string;
-}): Promise<ActionResult> {
+}): Promise<ClaimServerResult> {
   try {
     await assertSameOrigin();
     await requireAdmin();
     const server = claimPairingCode({ ...input, subjectHash: await adminSubject() });
     writeAudit("agent.pair", server.name);
     refresh();
-    return { error: null };
+    return { error: null, claimed: server };
   } catch (cause) {
     return { error: publicError(cause, "Не удалось привязать сервер.") };
+  }
+}
+
+export async function refreshServerAction(id: string): Promise<ActionResult & { server?: ServerRecord }> {
+  try {
+    await assertSameOrigin();
+    await requireAdmin();
+    const server = await getServer(id);
+    if (!server) return { error: "Сервер не найден." };
+    return { error: null, server };
+  } catch (cause) {
+    return { error: publicError(cause, "Не удалось обновить статус сервера.") };
   }
 }
 
