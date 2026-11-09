@@ -23,10 +23,12 @@ $releases = Join-Path $RepoRoot "releases"
 New-Item -ItemType Directory -Force -Path $releases | Out-Null
 
 Write-Host "Waiting for latest successful $Workflow run on main..."
-$runId = gh run list --workflow $Workflow --branch main --json databaseId,conclusion,status,headSha --limit 20 |
-  ConvertFrom-Json |
+$runs = gh run list --workflow $Workflow --branch main --json databaseId,conclusion,status,headSha --limit 20 | ConvertFrom-Json
+if ($null -eq $runs) { $runs = @() }
+$runs = @($runs)
+$runId = ($runs |
   Where-Object { $_.status -eq "completed" -and $_.conclusion -eq "success" } |
-  Select-Object -First 1 -ExpandProperty databaseId
+  Select-Object -First 1).databaseId
 
 if (-not $runId) {
   throw "No successful $Workflow run found on main yet. Push the workflow commit and wait for Actions."
