@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-VERSION=${VERSION:-0.3.0}
+VERSION=${VERSION:-0.4.0}
 OUT="$ROOT/releases"
 PUBLIC_URL=${FAMILY_VPN_PUBLIC_URL:-https://panel.example.com}
 PUBLIC_URL=${PUBLIC_URL%/}

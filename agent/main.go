@@ -163,8 +163,10 @@ func runLoop(args []string) int {
 		}
 	}
 	delay := time.Second
+	pendingResults := []JobResult(nil)
 	for {
-		err := client.Heartbeat(ctx, localReport())
+		peers := collectPeerStats()
+		jobs, err := client.Heartbeat(ctx, localReport(), peers, pendingResults)
 		if errors.Is(err, ErrRevoked) {
 			fmt.Fprintln(os.Stderr, "agent access revoked")
 			return 0
@@ -174,6 +176,11 @@ func runLoop(args []string) int {
 			if delay < 30*time.Second {
 				delay *= 2
 			}
+			continue
+		}
+		pendingResults = nil
+		if len(jobs) > 0 {
+			pendingResults = applyJobs(jobs)
 			continue
 		}
 		delay = time.Second

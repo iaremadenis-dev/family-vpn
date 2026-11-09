@@ -86,7 +86,10 @@ const ledStyles = {
   degraded: "bg-warn",
   offline: "bg-bad",
   active: "bg-ok",
+  pending: "bg-warn",
+  revoking: "bg-warn",
   revoked: "bg-bad",
+  error: "bg-bad",
 } as const;
 
 const badgeStyles = {
@@ -95,7 +98,10 @@ const badgeStyles = {
   degraded: "bg-warn/15 text-warn",
   offline: "bg-bad/15 text-bad",
   active: "bg-ok/15 text-ok",
+  pending: "bg-warn/15 text-warn",
+  revoking: "bg-warn/15 text-warn",
   revoked: "bg-bad/15 text-bad",
+  error: "bg-bad/15 text-bad",
 } as const;
 
 const badgeLabels = {
@@ -104,7 +110,10 @@ const badgeLabels = {
   degraded: "Нестабилен",
   offline: "Не в сети",
   active: "Активна",
+  pending: "Ожидает",
+  revoking: "Отзыв",
   revoked: "Отозвана",
+  error: "Ошибка",
 } as const;
 
 export function StatusBadge({

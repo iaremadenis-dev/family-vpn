@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const agentVersion = "0.3.0"
+const agentVersion = "0.4.0"
 
 var (
 	ErrRevoked = errors.New("agent access revoked")
@@ -135,38 +135,45 @@ func (c *Client) Poll(ctx context.Context) (string, error) {
 	}
 }
 
-func (c *Client) Heartbeat(ctx context.Context, report Report) error {
-	payload := map[string]any{"version": agentVersion, "report": report}
+func (c *Client) Heartbeat(ctx context.Context, report Report, peers []PeerStat, results []JobResult) ([]Job, error) {
+	payload := map[string]any{
+		"version":    agentVersion,
+		"report":     report,
+		"peers":      peers,
+		"jobResults": results,
+	}
 	var response struct {
 		Error string `json:"error"`
+		Jobs  []Job  `json:"jobs"`
 	}
 	status, err := c.post(ctx, "/api/agent/heartbeat", c.Token, payload, &response)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if status == http.StatusUnauthorized {
-		return ErrRevoked
+		return nil, ErrRevoked
 	}
 	if status >= 400 {
-		return errors.New("heartbeat rejected")
+		return nil, errors.New("heartbeat rejected")
 	}
-	return nil
+	return response.Jobs, nil
 }
 
-func (c *Client) HeartbeatRetry(ctx context.Context, report Report, attempts int) error {
+func (c *Client) HeartbeatRetry(ctx context.Context, report Report, peers []PeerStat, results []JobResult, attempts int) ([]Job, error) {
 	var last error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		last = c.Heartbeat(ctx, report)
-		if last == nil || errors.Is(last, ErrRevoked) {
-			return last
+		jobs, err := c.Heartbeat(ctx, report, peers, results)
+		if err == nil || errors.Is(err, ErrRevoked) {
+			return jobs, err
 		}
+		last = err
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(time.Duration(attempt) * 10 * time.Millisecond):
 		}
 	}
-	return last
+	return nil, last
 }
 
 func normalizeBackend(raw string) (string, error) {

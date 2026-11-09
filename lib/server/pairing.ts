@@ -5,6 +5,13 @@ import {
   randomUUID,
   verify,
 } from "node:crypto";
+import {
+  applyJobResults,
+  applyPeerStats,
+  takeJobsForServer,
+  type AgentJobResult,
+  type PeerStatInput,
+} from "@/lib/server/agent-jobs";
 import { getDb } from "@/lib/server/db";
 import { UserError } from "@/lib/server/errors";
 
@@ -256,9 +263,14 @@ export function claimPairingCode(input: {
 
 export function heartbeatAgent(
   token: string,
-  input: { version: string; report: AgentReport },
+  input: {
+    version: string;
+    report: AgentReport;
+    peers?: unknown;
+    jobResults?: unknown;
+  },
   subjectHash: string,
-): { ok: true } {
+): { ok: true; jobs: ReturnType<typeof takeJobsForServer> } {
   if (!token) {
     recordAttempt("heartbeat", subjectHash);
     throw new UserError("Нет учётных данных агента.", 401);
@@ -273,6 +285,7 @@ export function heartbeatAgent(
     throw new UserError("Доступ агента отозван.", 401);
   }
 
+  const serverId = String(row.server_id);
   const now = new Date().toISOString();
   const db = getDb();
   db.prepare(
@@ -290,12 +303,16 @@ export function heartbeatAgent(
     now,
     report.interfaceUp ? 1 : 0,
     now,
-    String(row.server_id),
+    serverId,
   );
   db.prepare(
     "UPDATE agents SET version = ?, delivery_token = NULL WHERE server_id = ?",
-  ).run(version, String(row.server_id));
-  return { ok: true };
+  ).run(version, serverId);
+
+  applyJobResults(serverId, normalizeJobResults(input.jobResults));
+  applyPeerStats(serverId, normalizePeerStats(input.peers));
+  const jobs = takeJobsForServer(serverId);
+  return { ok: true, jobs };
 }
 
 export function revokeAgent(serverId: string) {
@@ -398,6 +415,46 @@ function verifySignature(publicKey: string, message: string, signature: string):
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function normalizeJobResults(input: unknown): AgentJobResult[] {
+  if (!Array.isArray(input)) return [];
+  const out: AgentJobResult[] = [];
+  for (const item of input.slice(0, 32)) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as { id?: unknown; ok?: unknown; error?: unknown };
+    if (typeof row.id !== "string" || !row.id) continue;
+    out.push({
+      id: row.id,
+      ok: Boolean(row.ok),
+      error: typeof row.error === "string" ? row.error : undefined,
+    });
+  }
+  return out;
+}
+
+function normalizePeerStats(input: unknown): PeerStatInput[] {
+  if (!Array.isArray(input)) return [];
+  const out: PeerStatInput[] = [];
+  for (const item of input.slice(0, 512)) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as {
+      publicKey?: unknown;
+      allowedIps?: unknown;
+      rxBytes?: unknown;
+      txBytes?: unknown;
+      lastHandshake?: unknown;
+    };
+    if (typeof row.publicKey !== "string" || !WG_KEY.test(row.publicKey.trim())) continue;
+    out.push({
+      publicKey: row.publicKey.trim(),
+      allowedIps: typeof row.allowedIps === "string" ? row.allowedIps : undefined,
+      rxBytes: typeof row.rxBytes === "number" ? row.rxBytes : undefined,
+      txBytes: typeof row.txBytes === "number" ? row.txBytes : undefined,
+      lastHandshake: typeof row.lastHandshake === "number" ? row.lastHandshake : undefined,
+    });
+  }
+  return out;
 }
 
 function assertAttemptAllowed(scope: string, subjectHash: string, limit: number) {

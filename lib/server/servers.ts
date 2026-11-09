@@ -92,9 +92,14 @@ export async function deleteServer(id: string) {
   const db = getDb();
   const current = db.prepare("SELECT is_default FROM servers WHERE id = ?").get(id);
   if (!current) throw new UserError("Сервер не найден.");
+  const configs = db.prepare("SELECT COUNT(*) AS count FROM configs WHERE server_id = ?").get(id);
+  if (Number(configs?.count ?? 0) > 0) {
+    throw new UserError("Сначала удалите конфигурации этого сервера.");
+  }
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    db.prepare("DELETE FROM agent_jobs WHERE server_id = ?").run(id);
     db.prepare("DELETE FROM enrollments WHERE server_id = ?").run(id);
     db.prepare("DELETE FROM agents WHERE server_id = ?").run(id);
     db.prepare("DELETE FROM servers WHERE id = ?").run(id);

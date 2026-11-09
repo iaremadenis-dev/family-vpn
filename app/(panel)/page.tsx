@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { DashboardView } from "@/components/dashboard-view";
+import { listConfigs } from "@/lib/server/configs";
 import { listServers } from "@/lib/server/servers";
 
 export const metadata: Metadata = {
@@ -16,6 +17,6 @@ export default function DashboardPage() {
 }
 
 async function DashboardData() {
-  const servers = await listServers();
-  return <DashboardView servers={servers} />;
+  const [servers, configs] = await Promise.all([listServers(), listConfigs()]);
+  return <DashboardView servers={servers} configs={configs} />;
 }

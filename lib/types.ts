@@ -34,3 +34,23 @@ export type PanelSummary = {
   serverCount: number;
   onlineCount: number;
 };
+
+export type ConfigStatus = "pending" | "active" | "revoking" | "revoked" | "error";
+
+export type ConfigRecord = {
+  id: string;
+  serverId: string;
+  serverName: string;
+  deviceName: string;
+  vpnIp: string;
+  status: ConfigStatus;
+  lastError: string | null;
+  rxBytes: number | null;
+  txBytes: number | null;
+  lastHandshakeAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt: string | null;
+  clientPublicKey: string;
+  endpoint: string;
+};

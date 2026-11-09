@@ -1,12 +1,23 @@
 import Link from "next/link";
-import { IconServer } from "@/components/icons";
+import { DeviceIcon, IconServer } from "@/components/icons";
 import { EmptyState, RowMark, StatusBadge } from "@/components/ui";
-import type { ServerRecord } from "@/lib/types";
+import { formatBytes } from "@/lib/format";
+import type { ConfigRecord, ServerRecord } from "@/lib/types";
 
-export function DashboardView({ servers }: { servers: ServerRecord[] }) {
+export function DashboardView({
+  servers,
+  configs,
+}: {
+  servers: ServerRecord[];
+  configs: ConfigRecord[];
+}) {
   const defaultServer = servers.find((server) => server.isDefault);
   const online = servers.filter((server) => server.linkStatus === "online").length;
   const paired = servers.some((server) => server.paired);
+  const activeConfigs = configs.filter((config) => config.status === "active").length;
+  const totalRx = configs.reduce((sum, config) => sum + (config.rxBytes ?? 0), 0);
+  const totalTx = configs.reduce((sum, config) => sum + (config.txBytes ?? 0), 0);
+  const recent = configs.slice(0, 5);
 
   return (
     <div className="flex flex-col gap-5">
@@ -23,9 +34,13 @@ export function DashboardView({ servers }: { servers: ServerRecord[] }) {
         />
         <Stat
           label="Конфигурации"
-          value="—"
+          value={String(configs.length)}
           wash="bg-info/35"
-          hint="Выпуск WireGuard ещё не подключён"
+          hint={
+            configs.length === 0
+              ? "Выпуск WireGuard через панель"
+              : `Активных: ${activeConfigs}`
+          }
         />
         <Stat
           label="Агенты"
@@ -39,9 +54,13 @@ export function DashboardView({ servers }: { servers: ServerRecord[] }) {
         />
         <Stat
           label="Трафик"
-          value="—"
+          value={configs.length === 0 ? "—" : formatBytes(totalRx + totalTx)}
           wash="bg-accent/25"
-          hint="Счётчики с серверов не собираются"
+          hint={
+            configs.length === 0
+              ? "Счётчики появятся после peer-статистики"
+              : `RX ${formatBytes(totalRx)} · TX ${formatBytes(totalTx)}`
+          }
         />
       </section>
 
@@ -49,8 +68,11 @@ export function DashboardView({ servers }: { servers: ServerRecord[] }) {
         <section className="glass px-5 py-5 xl:col-span-3">
           <h2 className="text-sm font-medium text-ink">Трафик</h2>
           <p className="mt-2 text-sm text-muted">
-            График появится, когда агент начнёт присылать статистику WireGuard. Сейчас
-            показывать примерную кривую нельзя: это были бы ненастоящие данные.
+            Суммарный RX/TX берётся из heartbeat агента по известным peer. Неизвестные peer
+            (например, созданные вручную до панели) не удаляются и в эту сумму не входят.
+          </p>
+          <p className="mt-4 text-3xl font-semibold tabular-nums text-ink">
+            {configs.length === 0 ? "—" : formatBytes(totalRx + totalTx)}
           </p>
         </section>
 
@@ -87,13 +109,32 @@ export function DashboardView({ servers }: { servers: ServerRecord[] }) {
       </div>
 
       <section>
-        <SectionTitle href="/configurations" action="Конфигурации">
+        <SectionTitle href="/configurations" action="Все конфигурации">
           Конфигурации
         </SectionTitle>
-        <EmptyState
-          title="Конфигурации не выпускаются"
-          text="Создание peer, файл .conf и QR-код появятся после подключения агента. Сейчас список пуст намеренно."
-        />
+        {recent.length === 0 ? (
+          <EmptyState
+            title="Конфигураций нет"
+            text="Создайте первую в разделе «Конфигурации»: ключи, VPN-IP и peer регистрируются через агент."
+          />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {recent.map((config) => (
+              <li key={config.id} className="glass flex min-h-16 items-center gap-3 px-3 py-2.5">
+                <RowMark>
+                  <DeviceIcon name={config.deviceName} className="h-4 w-4" />
+                </RowMark>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-ink">{config.deviceName}</p>
+                  <p className="truncate text-xs text-muted">
+                    {config.serverName} · {config.vpnIp}
+                  </p>
+                </div>
+                <StatusBadge status={config.status} />
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );

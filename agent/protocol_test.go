@@ -54,7 +54,7 @@ func TestEnrollPollAndHeartbeat(t *testing.T) {
 	if err != nil || status != "paired" || client.Token != "secret-token" {
 		t.Fatalf("paired poll failed: %s", status)
 	}
-	if err := client.Heartbeat(context.Background(), sampleReport()); err != nil {
+	if _, err := client.Heartbeat(context.Background(), sampleReport(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -76,7 +76,7 @@ func TestExpiredCodeAndRevokedHeartbeat(t *testing.T) {
 	if !errors.Is(err, ErrExpired) {
 		t.Fatalf("expected expired, got %v", err)
 	}
-	err = client.HeartbeatRetry(context.Background(), sampleReport(), 3)
+	_, err = client.HeartbeatRetry(context.Background(), sampleReport(), nil, nil, 3)
 	if !errors.Is(err, ErrRevoked) {
 		t.Fatalf("expected revoked, got %v", err)
 	}
@@ -106,7 +106,7 @@ func TestHeartbeatReconnectsAfterDrop(t *testing.T) {
 		Token:   "token",
 		HTTP:    &http.Client{Timeout: time.Second},
 	}
-	if err := client.HeartbeatRetry(context.Background(), sampleReport(), 3); err != nil {
+	if _, err := client.HeartbeatRetry(context.Background(), sampleReport(), nil, nil, 3); err != nil {
 		t.Fatal(err)
 	}
 	if hits < 2 {
@@ -206,7 +206,7 @@ func TestEnrollPollAndHeartbeatOnTunnelAddress(t *testing.T) {
 	if err != nil || status != "paired" || client.Token != "secret-token" {
 		t.Fatalf("paired poll failed: %s %v", status, err)
 	}
-	if err := client.Heartbeat(context.Background(), sampleReport()); err != nil {
+	if _, err := client.Heartbeat(context.Background(), sampleReport(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }

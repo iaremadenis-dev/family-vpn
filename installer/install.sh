@@ -1,13 +1,14 @@
 #!/bin/bash
-# Family VPN installer 0.3.0
+# Family VPN installer 0.4.0
 # Downloads the agent only from the panel origin and verifies SHA-256 before install.
 # Plain HTTP is accepted only for 127.0.0.1 and localhost (SSH tunnel).
 # A remote panel must use HTTPS. This script does not pipe an unverified
 # remote script into a privileged shell by itself.
+# 0.4.0 adds WireGuard peer jobs via heartbeat; existing wg0.conf peers are preserved.
 set -euo pipefail
 umask 077
 
-VERSION="0.3.0"
+VERSION="0.4.0"
 BACKEND=""
 BINARY=""
 SHA256=""
