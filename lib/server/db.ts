@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 const globalForDb = globalThis as unknown as { familyVpnDb?: DatabaseSync };
 const migrated = new WeakSet<DatabaseSync>();
 
+export const SCHEMA_VERSION = 3;
+
 export function dataDirectory(): string {
   const configured = process.env.FAMILY_VPN_DATA_DIR?.trim();
   if (configured) return path.resolve(configured);
@@ -39,7 +41,7 @@ export function resetDbForTests() {
 function migrate(db: DatabaseSync) {
   const row = db.prepare("PRAGMA user_version").get();
   const version = Number(row?.user_version ?? 0);
-  if (version >= 3) {
+  if (version >= SCHEMA_VERSION) {
     ensureAgentTables(db);
     ensureConfigTables(db);
     return;
@@ -59,7 +61,7 @@ function migrate(db: DatabaseSync) {
       db.exec(configSchema);
       db.exec(upgradeServersForConfigs);
     }
-    db.exec("PRAGMA user_version = 3");
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec("COMMIT");
   } catch (cause) {
     db.exec("ROLLBACK");

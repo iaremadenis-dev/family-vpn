@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily read-only backup of the WireGuard server
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=24h
+Persistent=true
+RandomizedDelaySec=30min
+Unit=family-vpn-wg-backup.service
+
+[Install]
+WantedBy=timers.target

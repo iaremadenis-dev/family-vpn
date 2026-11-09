@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { applyJobResults, assertOnlineAgent, enqueueJob } from "@/lib/server/agent-jobs";
+import { requestBackup } from "@/lib/server/backup-request";
 import { getDb } from "@/lib/server/db";
 import { UserError } from "@/lib/server/errors";
 import { requireAdmin } from "@/lib/server/guard";
@@ -96,6 +97,7 @@ export async function createConfig(input: {
       allowedIps,
     });
     db.exec("COMMIT");
+    requestBackup("config");
   } catch (cause) {
     db.exec("ROLLBACK");
     if (isUniqueViolation(cause)) {
@@ -138,6 +140,7 @@ export async function revokeConfig(id: string): Promise<void> {
       publicKey: String(row.client_public_key),
     });
     db.exec("COMMIT");
+    requestBackup("config");
   } catch (cause) {
     db.exec("ROLLBACK");
     throw cause;
@@ -173,6 +176,7 @@ export async function deleteConfig(id: string): Promise<void> {
         publicKey: String(row.client_public_key),
       });
       db.exec("COMMIT");
+      requestBackup("config");
     } catch (cause) {
       db.exec("ROLLBACK");
       throw cause;
@@ -187,6 +191,7 @@ export async function deleteConfig(id: string): Promise<void> {
     db.prepare("DELETE FROM agent_jobs WHERE config_id = ?").run(id);
     db.prepare("DELETE FROM configs WHERE id = ?").run(id);
     db.exec("COMMIT");
+    requestBackup("config");
   } catch (cause) {
     db.exec("ROLLBACK");
     throw cause;

@@ -22,6 +22,7 @@ bash -n scripts/vps-preflight.sh
 bash -n panel/install-panel.sh
 bash -n panel/renew-cert.sh
 bash panel/install-panel.test.sh
+node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/backup-restore.test.ts
 bash installer/preserve-wg.test.sh
 bash installer/update-mode.test.sh
 bash installer/onboarding.test.sh

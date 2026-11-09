@@ -12,6 +12,7 @@ import {
   type AgentJobResult,
   type PeerStatInput,
 } from "@/lib/server/agent-jobs";
+import { requestBackup } from "@/lib/server/backup-request";
 import { getDb } from "@/lib/server/db";
 import { UserError } from "@/lib/server/errors";
 import type { ClaimedServerSummary } from "@/lib/types";
@@ -270,6 +271,7 @@ export function claimPairingCode(input: {
       String(enrollment.id),
     );
     db.exec("COMMIT");
+    requestBackup("agent");
   } catch (cause) {
     db.exec("ROLLBACK");
     throw cause;
@@ -353,6 +355,7 @@ export function revokeAgent(serverId: string) {
       "UPDATE agents SET revoked_at = ?, delivery_token = NULL, token_hash = ? WHERE server_id = ?",
     )
     .run(new Date().toISOString(), randomBytes(32).toString("hex"), serverId);
+  requestBackup("agent");
 }
 
 function assertReport(input: AgentReport): AgentReport {

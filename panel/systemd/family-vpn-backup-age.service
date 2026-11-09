@@ -1,0 +1,6 @@
+[Unit]
+Description=Check that a recent off-site Family VPN backup exists
+
+[Service]
+Type=oneshot
+ExecStart=__PANEL_DIR__/backup-panel.sh --check-age

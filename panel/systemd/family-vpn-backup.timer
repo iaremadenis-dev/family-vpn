@@ -1,0 +1,12 @@
+[Unit]
+Description=Back up the Family VPN panel every six hours
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+Persistent=true
+RandomizedDelaySec=20min
+Unit=family-vpn-backup.service
+
+[Install]
+WantedBy=timers.target

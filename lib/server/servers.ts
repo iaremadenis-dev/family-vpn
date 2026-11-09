@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { requestBackup } from "@/lib/server/backup-request";
 import { getDb } from "@/lib/server/db";
 import { UserError } from "@/lib/server/errors";
 import { requireAdmin } from "@/lib/server/guard";
@@ -77,6 +78,7 @@ export async function createServer(input: ServerInput): Promise<ServerRecord> {
     record.createdAt,
     record.updatedAt,
   );
+  requestBackup("server");
   return record;
 }
 
@@ -98,6 +100,7 @@ export async function updateServer(id: string, input: { name: string; location: 
   getDb()
     .prepare("UPDATE servers SET name = ?, location = ?, updated_at = ? WHERE id = ?")
     .run(name, location, new Date().toISOString(), id);
+  requestBackup("server");
 }
 
 export async function deleteServer(id: string) {
@@ -129,6 +132,7 @@ export async function deleteServer(id: string) {
       }
     }
     db.exec("COMMIT");
+    requestBackup("server");
   } catch (cause) {
     db.exec("ROLLBACK");
     throw cause;
@@ -148,6 +152,7 @@ export async function setDefaultServer(id: string) {
     db.prepare("UPDATE servers SET is_default = 0").run();
     db.prepare("UPDATE servers SET is_default = 1, updated_at = ? WHERE id = ?").run(now, id);
     db.exec("COMMIT");
+    requestBackup("server");
   } catch (cause) {
     db.exec("ROLLBACK");
     throw cause;

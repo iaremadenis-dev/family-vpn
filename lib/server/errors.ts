@@ -1,10 +1,13 @@
 export class UserError extends Error {
   readonly status: number;
 
-  constructor(message: string, status = 400) {
+  readonly code: string;
+
+  constructor(message: string, status = 400, code = "user") {
     super(message);
     this.name = "UserError";
     this.status = status;
+    this.code = code;
   }
 }
 

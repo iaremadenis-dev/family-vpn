@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+__pycache__/
+*.pyc
 
 # next.js
 /.next/
@@ -44,6 +46,8 @@ next-env.d.ts
 
 # private keys
 *.key
+*.age
+backup.env
 *.p12
 *.pfx
 id_rsa

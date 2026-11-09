@@ -1,9 +1,10 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { createAdmin, hasAdmin, verifyAdminPassword } from "@/lib/server/admin";
+import { hasAdmin, verifyAdminPassword } from "@/lib/server/admin";
+import { completeSetup } from "@/lib/server/setup-token";
+import { UserError, publicError } from "@/lib/server/errors";
 import { writeAudit } from "@/lib/server/audit";
-import { publicError } from "@/lib/server/errors";
 import { assertSameOrigin } from "@/lib/server/guard";
 import {
   assertLoginAllowed,
@@ -27,11 +28,18 @@ export async function setupAdmin(
     const confirm = String(formData.get("confirm") ?? "");
     if (password !== confirm) return { error: "Пароли не совпадают." };
 
-    createAdmin(String(formData.get("name") ?? ""), password);
+    completeSetup(
+      String(formData.get("name") ?? ""),
+      password,
+      String(formData.get("activation") ?? ""),
+    );
     await clearLoginFailures();
     await createSession();
     writeAudit("admin.setup");
   } catch (cause) {
+    if (cause instanceof UserError && cause.code === "setup_token") {
+      await recordLoginFailure();
+    }
     return { error: publicError(cause, "Не удалось создать администратора.") };
   }
 

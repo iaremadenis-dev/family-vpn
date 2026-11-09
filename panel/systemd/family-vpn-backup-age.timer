@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily check of the newest off-site Family VPN backup
+
+[Timer]
+OnBootSec=3h
+OnUnitActiveSec=24h
+Persistent=true
+Unit=family-vpn-backup-age.service
+
+[Install]
+WantedBy=timers.target

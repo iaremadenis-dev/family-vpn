@@ -1,7 +1,12 @@
+import { requestBackup } from "@/lib/server/backup-request";
 import { getDb } from "@/lib/server/db";
 import { UserError } from "@/lib/server/errors";
-import { requireAdmin } from "@/lib/server/guard";
 import { hashPassword, validatePassword, verifyPassword } from "@/lib/server/password";
+
+async function requireCurrentAdmin() {
+  const { requireAdmin } = await import("@/lib/server/guard");
+  return requireAdmin();
+}
 
 export function hasAdmin(): boolean {
   const row = getDb().prepare("SELECT id FROM admin WHERE id = 1").get();
@@ -19,6 +24,7 @@ export function createAdmin(displayName: string, password: string) {
       "INSERT INTO admin (id, display_name, password_hash, created_at) VALUES (1, ?, ?, ?)",
     )
     .run(name, hashPassword(password), new Date().toISOString());
+  requestBackup("admin");
 }
 
 export function verifyAdminPassword(password: string): boolean {
@@ -28,13 +34,14 @@ export function verifyAdminPassword(password: string): boolean {
 }
 
 export async function renameAdmin(displayName: string) {
-  await requireAdmin();
+  await requireCurrentAdmin();
   const name = validateDisplayName(displayName);
   getDb().prepare("UPDATE admin SET display_name = ? WHERE id = 1").run(name);
+  requestBackup("admin");
 }
 
 export async function changeAdminPassword(currentPassword: string, nextPassword: string) {
-  await requireAdmin();
+  await requireCurrentAdmin();
   if (!verifyAdminPassword(currentPassword)) {
     throw new UserError("Текущий пароль неверный.");
   }
@@ -46,6 +53,7 @@ export async function changeAdminPassword(currentPassword: string, nextPassword:
   getDb()
     .prepare("UPDATE admin SET password_hash = ? WHERE id = 1")
     .run(hashPassword(nextPassword));
+  requestBackup("admin");
 }
 
 function validateDisplayName(value: string): string {

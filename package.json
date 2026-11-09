@@ -10,7 +10,8 @@
     "test:pairing": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/pairing.test.ts",
     "test:configs": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/wireguard.test.ts lib/server/configs.test.ts",
     "test:install-command": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/install-command.test.ts",
-    "test": "npm run test:pairing && npm run test:configs && npm run test:install-command",
+    "test:backup": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/backup-restore.test.ts",
+    "test": "npm run test:pairing && npm run test:configs && npm run test:install-command && npm run test:backup",
     "test:production": "bash scripts/verify-production-ready.sh",
     "release:agent": "bash scripts/build-release.sh"
   },

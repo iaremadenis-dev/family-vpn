@@ -1,0 +1,7 @@
+[Unit]
+Description=Encrypt a Family VPN panel backup and upload it
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=__PANEL_DIR__/backup-panel.sh

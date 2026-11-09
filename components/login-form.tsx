@@ -17,10 +17,21 @@ export function LoginForm({ mode }: { mode: "setup" | "login" }) {
         </h1>
         <p className="mt-2 text-sm text-muted">
           {mode === "setup"
-            ? "Создаётся единственная учётная запись. Пароль хранится только как хеш в локальной базе."
+            ? "Создаётся единственная учётная запись. На публичной панели нужен одноразовый код активации."
             : "Одна учётная запись. Пароль VPS сюда не вводится."}
         </p>
         <div className="mt-5 flex flex-col gap-4">
+          {mode === "setup" ? (
+            <Field id="activation" label="Код активации" hint="Одноразовый код с установки сервера.">
+              <input
+                id="activation"
+                name="activation"
+                className={inputClass}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </Field>
+          ) : null}
           {mode === "setup" ? (
             <Field id="name" label="Имя">
               <input

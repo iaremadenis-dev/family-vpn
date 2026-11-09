@@ -2,7 +2,7 @@
 # Install a new Family VPN panel on Ubuntu 24.04.
 # HTTPS is a Let's Encrypt certificate for the public IPv4 (shortlived, 160 hours).
 # The script does not stop WireGuard, edit wg0.conf, or rewrite the firewall.
-# --restore is reserved for the next stage and changes nothing.
+# --restore decrypts an age archive onto this host and issues a new IP certificate.
 set -euo pipefail
 umask 077
 
@@ -24,6 +24,17 @@ PANEL_IP=${FAMILY_VPN_PANEL_IP:-}
 EMAIL=""
 STAGING=0
 DRY_RUN=0
+BACKUP_PUBKEY=""
+BACKUP_PUBKEY_FILE=""
+IDENTITY=""
+AGE_KEYGEN=${FAMILY_VPN_AGE_KEYGEN:-age-keygen}
+if [ -n "${FAMILY_VPN_PYTHON:-}" ]; then
+  PYTHON=$FAMILY_VPN_PYTHON
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+else
+  PYTHON=python
+fi
 
 die() {
   echo "family-vpn-panel: $*" >&2
@@ -41,13 +52,15 @@ log() {
 usage() {
   cat <<'EOF'
 usage:
-  install-panel.sh --new --email admin@example.com [--ip A.B.C.D] [--staging] [--dry-run]
-  install-panel.sh --restore <archive>
+  install-panel.sh --new --email admin@example.com --backup-pubkey age1... [--ip A.B.C.D] [--staging] [--dry-run]
+  install-panel.sh --restore <archive> --identity <age-key> --email admin@example.com [--ip A.B.C.D]
+  install-panel.sh --setup-token
   install-panel.sh --check
 
---new installs a panel and leaves administrator creation to https://<ip>/login.
-The password is never accepted on the command line.
---restore is not implemented yet and does not change data or services.
+--new prints a one-time activation code and does not accept an administrator password.
+--restore decrypts a panel archive, keeps the administrator, and issues a certificate for this IP.
+The age private key is read from a file and removed from this host after a successful restore.
+WireGuard servers are not changed.
 EOF
 }
 
@@ -169,7 +182,7 @@ compose() {
 
 install_packages() {
   apt-get update
-  apt-get install -y ca-certificates curl iproute2 openssl python3 python3-venv
+  apt-get install -y age ca-certificates curl iproute2 openssl python3 python3-cryptography python3-venv
   if ! command -v docker >/dev/null 2>&1; then
     apt-get install -y docker.io
   fi
@@ -230,92 +243,70 @@ install_renewal() {
   systemctl enable --now family-vpn-cert-renew.timer
 }
 
-cmd_restore() {
-  local archive=${1:-}
-  [ -n "$archive" ] || die "usage: install-panel.sh --restore <archive>"
-  log "RESTORE_LATER: режим --restore подготовлен и пока ничего не меняет."
-  log "Архив не читается, база не записывается, службы не перезапускаются."
-  log "Следующий этап проверит подпись, SHA-256 и соответствие master.key базе."
-  exit 2
+install_backup() {
+  sed "s#__PANEL_DIR__#${PANEL_DIR}#g" "$PANEL_DIR/systemd/family-vpn-backup.service" \
+    >/etc/systemd/system/family-vpn-backup.service
+  sed "s#__PANEL_DIR__#${PANEL_DIR}#g" "$PANEL_DIR/systemd/family-vpn-backup-age.service" \
+    >/etc/systemd/system/family-vpn-backup-age.service
+  install -m 644 "$PANEL_DIR/systemd/family-vpn-backup.timer" /etc/systemd/system/family-vpn-backup.timer
+  install -m 644 "$PANEL_DIR/systemd/family-vpn-backup-age.timer" /etc/systemd/system/family-vpn-backup-age.timer
+  install -m 644 "$PANEL_DIR/systemd/family-vpn-backup.path" /etc/systemd/system/family-vpn-backup.path
+  : >"$STATE_DIR/backup.requested"
+  chown 1001:1001 "$STATE_DIR/backup.requested" 2>/dev/null || true
+  chmod 600 "$STATE_DIR/backup.requested" 2>/dev/null || true
+  systemctl daemon-reload
+  systemctl enable --now family-vpn-backup.timer family-vpn-backup.path family-vpn-backup-age.timer
 }
 
-cmd_check() {
-  local required template
-  for required in \
-    "$PANEL_DIR/Caddyfile.bootstrap" \
-    "$PANEL_DIR/Caddyfile.https" \
-    "$PANEL_DIR/docker-compose.yml" \
-    "$PANEL_DIR/renew-cert.sh" \
-    "$PANEL_DIR/certbot-requirements.txt" \
-    "$PANEL_DIR/systemd/family-vpn-cert-renew.service" \
-    "$PANEL_DIR/systemd/family-vpn-cert-renew.timer"
-  do
-    [ -f "$required" ] || die "missing $required"
-  done
-  for template in "$PANEL_DIR/Caddyfile.bootstrap" "$PANEL_DIR/Caddyfile.https"; do
-    grep -q '__PANEL_IP__' "$template" || die "$template has no panel IP placeholder"
-    grep -q 'acme-challenge' "$template" || die "$template does not serve the ACME challenge"
-    grep -q 'auto_https off' "$template" || die "$template must not ask Caddy to issue its own certificate"
-  done
-  grep -q '/certs/fullchain.pem' "$PANEL_DIR/Caddyfile.https"
-  grep -q 'reverse_proxy panel:3000' "$PANEL_DIR/Caddyfile.https"
-  grep -q 'certbot renew' "$PANEL_DIR/renew-cert.sh"
-  grep -q 'caddy reload' "$PANEL_DIR/renew-cert.sh"
-  grep -q 'checkend 172800' "$PANEL_DIR/renew-cert.sh"
-  grep -q 'IP Address:' "$PANEL_DIR/renew-cert.sh"
-  grep -q 'certbot>=5.4' "$PANEL_DIR/certbot-requirements.txt"
-  grep -q 'preferred-profile shortlived' "$PANEL_DIR/install-panel.sh"
-  is_public_ipv4 203.0.113.5 || die "public IP check failed"
-  if is_public_ipv4 10.1.2.3 || is_public_ipv4 127.0.0.1 || is_public_ipv4 192.168.1.1; then
-    die "private IP was accepted"
-  fi
-  log "CHECK_OK"
+save_pubkey() {
+  [[ "$BACKUP_PUBKEY" =~ ^age1[0-9a-z]+$ ]] || die "PUBKEY_INVALID"
+  printf '%s\n' "$BACKUP_PUBKEY" >"$ETC_DIR/backup.pub"
+  chmod 644 "$ETC_DIR/backup.pub"
 }
 
-cmd_new() {
-  [ -n "$EMAIL" ] || die "укажите --email для учётки Let's Encrypt"
-  valid_email "$EMAIL" || die "адрес --email выглядит неверно"
-  if [ -z "$PANEL_IP" ]; then
-    PANEL_IP=$(detect_public_ipv4) || die "не удалось определить публичный IPv4; укажите --ip"
+resolve_pubkey() {
+  if [ -n "$BACKUP_PUBKEY_FILE" ]; then
+    [ -f "$BACKUP_PUBKEY_FILE" ] || die "PUBKEY_MISSING"
+    BACKUP_PUBKEY=$(tr -d '[:space:]' <"$BACKUP_PUBKEY_FILE")
   fi
-  is_public_ipv4 "$PANEL_IP" || die "PRIVATE_IP: $PANEL_IP не является публичным IPv4"
-  [ -f "$APP_DIR/Dockerfile" ] || die "запустите скрипт из копии репозитория: в $APP_DIR нет Dockerfile"
-  [ -f "$COMPOSE_FILE" ] || die "не найден $COMPOSE_FILE"
-  refuse_existing_data
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    log "DRY_RUN_OK ip=$PANEL_IP url=https://$PANEL_IP"
-    log "SQLite и master.key будут в $STATE_DIR с правами только у uid 1001."
-    log "Администратор создаётся в браузере на /login. Пароль установщик не принимает."
-    log "WireGuard, wg0.conf, peers, UDP 51820 и действующий firewall не изменяются."
-    log "Повторный запуск при уже существующей базе останавливается, не стирая её."
-    exit 0
+  if printf '%s' "$BACKUP_PUBKEY" | grep -q 'AGE-SECRET-KEY-'; then
+    die "PRIVATE_KEY_REFUSED"
   fi
+  [[ "$BACKUP_PUBKEY" =~ ^age1[0-9a-z]+$ ]] || die "PUBKEY_MISSING"
+}
 
-  [ "$(id -u)" -eq 0 ] || die "запустите установщик от root"
-  [ -r /etc/os-release ] || die "нужна Ubuntu 24.04"
-  # shellcheck disable=SC1091
-  . /etc/os-release
-  [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] || die "нужна Ubuntu 24.04, обнаружено ${PRETTY_NAME:-unknown}"
-
-  if wireguard_present; then
-    log "WireGuard обнаружен. wg0, его конфигурация, peers и firewall не изменяются."
-    log "Порты 80 и 443 должны уже быть доступны снаружи. Установщик правила firewall не пишет."
-  else
-    log "Firewall не переписывается. Откройте TCP 80 и 443, если они ещё закрыты."
-  fi
-  if ! command -v ss >/dev/null 2>&1; then
+issue_setup_token() {
+  local pair token hash
+  if ! command -v "$PYTHON" >/dev/null 2>&1; then
     apt-get update
-    apt-get install -y iproute2
+    apt-get install -y python3
+    PYTHON=python3
   fi
-  require_ports_available
+  pair=$("$PYTHON" -c 'import hashlib, secrets
+token = secrets.token_hex(32)
+print(token)
+print(hashlib.sha256(token.encode()).hexdigest())')
+  token=${pair%%$'\n'*}
+  hash=${pair#*$'\n'}
+  printf '%s\n' "$hash" >"$STATE_DIR/setup-token.sha256"
+  chmod 600 "$STATE_DIR/setup-token.sha256" 2>/dev/null || true
+  printf '%s\n' "SETUP_TOKEN=${token}"
+  printf '%s\n' "Код активации показан один раз и в журнал не пишется."
+}
 
-  install -d -m 755 /var/lib/family-vpn "$ETC_DIR" "$BIN_DIR"
-  install -d -m 700 -o 1001 -g 1001 "$STATE_DIR"
-  install -d -m 755 "$ACME_DIR"
-  install -d -m 700 "$CERT_DIR"
-  refuse_existing_data
+admin_exists() {
+  [ -f "$STATE_DIR/family-vpn.sqlite" ] || return 1
+  "$PYTHON" -c 'import sqlite3, sys
+connection = sqlite3.connect(sys.argv[1])
+try:
+    row = connection.execute("select id from admin where id = 1").fetchone()
+except sqlite3.DatabaseError:
+    raise SystemExit(2)
+raise SystemExit(0 if row else 1)
+' "$STATE_DIR/family-vpn.sqlite"
+}
 
+start_https() {
   install_packages
   install_certbot
   write_env
@@ -334,6 +325,7 @@ cmd_new() {
   render_caddy "$PANEL_DIR/Caddyfile.https"
   compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
   install_renewal
+  install_backup
 
   local -a curl_tls=()
   if [ "$STAGING" -eq 1 ]; then
@@ -343,6 +335,181 @@ cmd_new() {
   if ! curl -fsS "${curl_tls[@]}" --max-time 20 "https://${PANEL_IP}/login" >/dev/null; then
     die "панель не ответила на https://${PANEL_IP}/login. Данные в $STATE_DIR не удалялись."
   fi
+}
+
+prepare_host() {
+  [ "$(id -u)" -eq 0 ] || die "запустите установщик от root"
+  [ -r /etc/os-release ] || die "нужна Ubuntu 24.04"
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] || die "нужна Ubuntu 24.04, обнаружено ${PRETTY_NAME:-unknown}"
+  if wireguard_present; then
+    log "WireGuard обнаружен. wg0, его конфигурация, peers и firewall не изменяются."
+    log "Порты 80 и 443 должны уже быть доступны снаружи. Установщик правила firewall не пишет."
+  else
+    log "Firewall не переписывается. Откройте TCP 80 и 443, если они ещё закрыты."
+  fi
+  if ! command -v ss >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y iproute2
+  fi
+  require_ports_available
+  install -d -m 755 /var/lib/family-vpn "$ETC_DIR" "$BIN_DIR"
+  install -d -m 700 -o 1001 -g 1001 "$STATE_DIR"
+  install -d -m 755 "$ACME_DIR"
+  install -d -m 700 "$CERT_DIR"
+}
+
+cmd_setup_token() {
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR" 2>/dev/null || true
+  set +e
+  admin_exists
+  local code=$?
+  set -e
+  if [ "$code" -eq 0 ]; then
+    die "ADMIN_EXISTS"
+  fi
+  if [ "$code" -eq 2 ]; then
+    die "SQLITE_UNREADABLE"
+  fi
+  issue_setup_token
+}
+
+cmd_restore() {
+  local archive=${1:-}
+  [ -n "$archive" ] || die "usage: install-panel.sh --restore <archive> --identity <file>"
+  [ -n "$IDENTITY" ] || die "укажите --identity с файлом приватного ключа age"
+  [ -n "$EMAIL" ] || die "укажите --email для учётки Let's Encrypt"
+  valid_email "$EMAIL" || die "адрес --email выглядит неверно"
+  if [ -z "$PANEL_IP" ]; then
+    PANEL_IP=$(detect_public_ipv4) || die "не удалось определить публичный IPv4; укажите --ip"
+  fi
+  is_public_ipv4 "$PANEL_IP" || die "PRIVATE_IP: $PANEL_IP не является публичным IPv4"
+  if [[ "$archive" != s3://* ]] && [ ! -f "$archive" ]; then
+    die "ARCHIVE_MISSING"
+  fi
+  [ -f "$IDENTITY" ] || die "IDENTITY_MISSING"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    refuse_existing_data
+    log "RESTORE_DRY_RUN ip=$PANEL_IP"
+    log "Архив будет проверен до записи. Существующая база не перезаписывается."
+    log "После восстановления выпускается новый сертификат на этот IP."
+    log "Серверы WireGuard и их peers этой командой не меняются."
+    exit 0
+  fi
+
+  prepare_host
+  install_packages
+  set +e
+  bash "$PANEL_DIR/restore-panel.sh" --archive "$archive" --identity "$IDENTITY" --into "$STATE_DIR"
+  local code=$?
+  set -e
+  if [ "$code" -eq 3 ]; then
+    log "DATA_EXISTS: в $STATE_DIR уже другая база. Она не изменена."
+    exit 3
+  fi
+  [ "$code" -eq 0 ] || die "RESTORE_FAIL"
+
+  BACKUP_PUBKEY=$("$AGE_KEYGEN" -y "$IDENTITY")
+  save_pubkey
+  if [ "${FAMILY_VPN_KEEP_IDENTITY:-}" != "1" ]; then
+    if command -v shred >/dev/null 2>&1; then
+      shred -u "$IDENTITY" 2>/dev/null || rm -f "$IDENTITY"
+    else
+      rm -f "$IDENTITY"
+    fi
+    log "Копия ключа расшифровки на этом сервере удалена."
+  fi
+  set +e
+  admin_exists
+  code=$?
+  set -e
+  if [ "$code" -eq 1 ]; then
+    issue_setup_token
+  fi
+  start_https
+  log "RESTORE_OK https://${PANEL_IP}/login"
+  log "AGENTS_UNCHANGED: адреса агентов этой командой не менялись."
+}
+
+cmd_check() {
+  local required template
+  for required in \
+    "$PANEL_DIR/Caddyfile.bootstrap" \
+    "$PANEL_DIR/Caddyfile.https" \
+    "$PANEL_DIR/docker-compose.yml" \
+    "$PANEL_DIR/renew-cert.sh" \
+    "$PANEL_DIR/certbot-requirements.txt" \
+    "$PANEL_DIR/systemd/family-vpn-cert-renew.service" \
+    "$PANEL_DIR/systemd/family-vpn-cert-renew.timer" \
+    "$PANEL_DIR/backup-panel.sh" \
+    "$PANEL_DIR/restore-panel.sh" \
+    "$PANEL_DIR/backup-wg.sh" \
+    "$PANEL_DIR/restore-wg.sh" \
+    "$PANEL_DIR/archive-tool.mjs" \
+    "$PANEL_DIR/s3_store.py" \
+    "$PANEL_DIR/archive_host.py" \
+    "$PANEL_DIR/backup.env.example" \
+    "$PANEL_DIR/systemd/family-vpn-backup.service" \
+    "$PANEL_DIR/systemd/family-vpn-backup.timer" \
+    "$PANEL_DIR/systemd/family-vpn-wg-backup.service"
+  do
+    [ -f "$required" ] || die "missing $required"
+  done
+  for template in "$PANEL_DIR/Caddyfile.bootstrap" "$PANEL_DIR/Caddyfile.https"; do
+    grep -q '__PANEL_IP__' "$template" || die "$template has no panel IP placeholder"
+    grep -q 'acme-challenge' "$template" || die "$template does not serve the ACME challenge"
+    grep -q 'auto_https off' "$template" || die "$template must not ask Caddy to issue its own certificate"
+  done
+  grep -q '/certs/fullchain.pem' "$PANEL_DIR/Caddyfile.https"
+  grep -q 'reverse_proxy panel:3000' "$PANEL_DIR/Caddyfile.https"
+  grep -q 'certbot renew' "$PANEL_DIR/renew-cert.sh"
+  grep -q 'caddy reload' "$PANEL_DIR/renew-cert.sh"
+  grep -q 'checkend 172800' "$PANEL_DIR/renew-cert.sh"
+  grep -q 'IP Address:' "$PANEL_DIR/renew-cert.sh"
+  grep -q 'certbot>=5.4' "$PANEL_DIR/certbot-requirements.txt"
+  grep -q 'preferred-profile shortlived' "$PANEL_DIR/install-panel.sh"
+  grep -q 'KEY_MISMATCH' "$PANEL_DIR/archive-tool.mjs"
+  grep -q 'SCHEMA_MAX = 3' "$PANEL_DIR/archive-tool.mjs"
+  grep -q 'UPLOAD_OK' "$PANEL_DIR/backup-panel.sh"
+  grep -q 'DATA_EXISTS' "$PANEL_DIR/restore-panel.sh"
+  grep -q 'DECRYPT_FAIL' "$PANEL_DIR/restore-panel.sh"
+  is_public_ipv4 203.0.113.5 || die "public IP check failed"
+  if is_public_ipv4 10.1.2.3 || is_public_ipv4 127.0.0.1 || is_public_ipv4 192.168.1.1; then
+    die "private IP was accepted"
+  fi
+  log "CHECK_OK"
+}
+
+cmd_new() {
+  resolve_pubkey
+  [ -n "$EMAIL" ] || die "укажите --email для учётки Let's Encrypt"
+  valid_email "$EMAIL" || die "адрес --email выглядит неверно"
+  if [ -z "$PANEL_IP" ]; then
+    PANEL_IP=$(detect_public_ipv4) || die "не удалось определить публичный IPv4; укажите --ip"
+  fi
+  is_public_ipv4 "$PANEL_IP" || die "PRIVATE_IP: $PANEL_IP не является публичным IPv4"
+  [ -f "$APP_DIR/Dockerfile" ] || die "запустите скрипт из копии репозитория: в $APP_DIR нет Dockerfile"
+  [ -f "$COMPOSE_FILE" ] || die "не найден $COMPOSE_FILE"
+  refuse_existing_data
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "DRY_RUN_OK ip=$PANEL_IP url=https://$PANEL_IP"
+    log "SQLite и master.key будут в $STATE_DIR с правами только у uid 1001."
+    log "Администратор создаётся в браузере на /login по одноразовому коду. Пароль установщик не принимает."
+    log "Копии шифруются публичным ключом age. Приватный ключ на сервер не кладётся."
+    log "WireGuard, wg0.conf, peers, UDP 51820 и действующий firewall не изменяются."
+    log "Повторный запуск при уже существующей базе останавливается, не стирая её."
+    exit 0
+  fi
+
+  prepare_host
+  refuse_existing_data
+  save_pubkey
+  issue_setup_token
+  start_https
   log "Панель слушает https://${PANEL_IP}/login"
   log "Создайте администратора в браузере. Установщик пароль не видит и не записывает."
   log "База и master.key остаются в $STATE_DIR."
@@ -388,6 +555,26 @@ while [ $# -gt 0 ]; do
       DRY_RUN=1
       shift
       ;;
+    --backup-pubkey)
+      [ $# -ge 2 ] || die "укажите публичный ключ age после --backup-pubkey"
+      BACKUP_PUBKEY=$2
+      shift 2
+      ;;
+    --backup-pubkey-file)
+      [ $# -ge 2 ] || die "укажите файл после --backup-pubkey-file"
+      BACKUP_PUBKEY_FILE=$2
+      shift 2
+      ;;
+    --identity)
+      [ $# -ge 2 ] || die "укажите файл после --identity"
+      IDENTITY=$2
+      shift 2
+      ;;
+    --setup-token)
+      [ -z "$MODE" ] || die "укажите только один режим"
+      MODE=setup-token
+      shift
+      ;;
     --password|--admin-password)
       die "пароль администратора нельзя передавать установщику"
       ;;
@@ -404,6 +591,7 @@ done
 case "$MODE" in
   new) cmd_new ;;
   restore) cmd_restore "${RESTORE_ARCHIVE:-}" ;;
+  setup-token) cmd_setup_token ;;
   check) cmd_check ;;
-  *) usage; die "укажите --new, --restore или --check" ;;
+  *) usage; die "укажите --new, --restore, --setup-token или --check" ;;
 esac

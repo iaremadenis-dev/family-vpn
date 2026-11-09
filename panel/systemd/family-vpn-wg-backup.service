@@ -1,0 +1,7 @@
+[Unit]
+Description=Encrypt a read-only WireGuard server backup
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=__PANEL_DIR__/backup-wg.sh

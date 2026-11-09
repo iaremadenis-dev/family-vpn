@@ -2,7 +2,7 @@
 
 Документ описывает подготовку панели к HTTPS и публикацию артефактов агента. Автоматического запуска на серверах нет.
 
-Панель на публичном IPv4 без домена ставится из копии репозитория: `sudo bash panel/install-panel.sh --new --email you@example.com`. Точная последовательность — в README.
+Панель на публичном IPv4 без домена ставится из копии репозитория: `sudo bash panel/install-panel.sh --new --email you@example.com --backup-pubkey age1...`. Восстановление из зашифрованной копии — `panel/install-panel.sh --restore`. Точная последовательность — в README.
 
 ## Что входит в комплект
 

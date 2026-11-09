@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { requestBackup } from "@/lib/server/backup-request";
 import { getDb } from "@/lib/server/db";
 import { UserError } from "@/lib/server/errors";
 
@@ -88,6 +89,7 @@ export function applyJobResults(serverId: string, results: AgentJobResult[]) {
   const now = new Date().toISOString();
 
   db.exec("BEGIN IMMEDIATE");
+  let changed = false;
   try {
     for (const result of results.slice(0, 32)) {
       if (!result || typeof result.id !== "string") continue;
@@ -112,6 +114,7 @@ export function applyJobResults(serverId: string, results: AgentJobResult[]) {
          SET status = ?, last_error = ?, updated_at = ?, completed_at = ?
          WHERE id = ?`,
       ).run(ok ? "succeeded" : "failed", error, now, now, String(row.id));
+      changed = true;
 
       if (!row.config_id) continue;
       if (String(row.type) === "add_peer") {
@@ -146,6 +149,7 @@ export function applyJobResults(serverId: string, results: AgentJobResult[]) {
       }
     }
     db.exec("COMMIT");
+    if (changed) requestBackup("config");
   } catch (cause) {
     db.exec("ROLLBACK");
     throw cause;
