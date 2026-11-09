@@ -234,6 +234,88 @@ describe("panel backup and restore", () => {
       assertRecovered(fromS3);
       assert.equal(readFileSync(path.join(fromS3, "panel.env.previous"), "utf8").includes("203.0.113.5"), true);
 
+      const plain = path.join(work, "plain.tar");
+      const decoded = run(tools.age, ["-d", "-i", identity, "-o", plain, archiveName(backupDir)], {});
+      assert.equal(decoded.status, 0, `${decoded.stdout}\n${decoded.stderr}`);
+      const localDir = path.join(work, "from-local-decrypt");
+      const localRestore = run(
+        bash,
+        [path.join(normalizedRoot(), "panel/restore-panel.sh"), "--payload", plain, "--into", localDir],
+        common,
+      );
+      assert.equal(localRestore.status, 0, `${localRestore.stdout}\n${localRestore.stderr}`);
+      assert.match(localRestore.stdout, /RESTORE_OK/);
+      assertRecovered(localDir);
+      const identityText = readFileSync(identity, "utf8");
+      assert.equal(readFileSync(path.join(localDir, "family-vpn.sqlite")).toString("latin1").includes(identityText.trim()), false);
+      assert.equal(readFileSync(path.join(localDir, "master.key")).toString("latin1").includes("AGE-SECRET"), false);
+
+      const pushed = run(
+        bash,
+        [
+          path.join(normalizedRoot(), "panel/push-restore.sh"),
+          "--host",
+          "root@203.0.113.8",
+          "--archive",
+          archiveName(backupDir),
+          "--identity",
+          identity,
+          "--email",
+          "admin@example.com",
+          "--dry-run",
+          "--no-sudo",
+        ],
+        bashEnv({}),
+      );
+      assert.equal(pushed.status, 0, `${pushed.stdout}\n${pushed.stderr}`);
+      assert.match(pushed.stdout, /KEY_STAYS_LOCAL/);
+      assert.match(pushed.stdout, /--decrypted/);
+      assert.equal(pushed.stdout.includes(identity), false);
+      assert.equal(pushed.stdout.includes("AGE-SECRET"), false);
+      assert.equal(`${pushed.stdout}\n${pushed.stderr}`.includes("ssh "), false);
+
+      const badTar = path.join(work, "bad.tar");
+      const flipped = readFileSync(plain);
+      flipped[20] = flipped[20] === 1 ? 2 : 1;
+      writeFileSync(badTar, flipped);
+      const badDir = path.join(work, "bad-payload");
+      const badRestore = run(
+        bash,
+        [path.join(normalizedRoot(), "panel/restore-panel.sh"), "--payload", badTar, "--into", badDir],
+        common,
+      );
+      assert.notEqual(badRestore.status, 0);
+      assert.equal(existsSync(path.join(badDir, "family-vpn.sqlite")), false);
+      assert.equal(existsSync(path.join(badDir, "master.key")), false);
+
+      const deadEnv = path.join(work, "dead.env");
+      writeFileSync(
+        deadEnv,
+        [
+          "S3_ENDPOINT=http://127.0.0.1:9",
+          "S3_BUCKET=family-vpn-test",
+          "S3_REGION=us-east-1",
+          "S3_ACCESS_KEY_ID=AKIATEST",
+          `S3_SECRET_ACCESS_KEY=${s3Secret}`,
+          "S3_PREFIX=lab",
+          "",
+        ].join("\n"),
+      );
+      const deadDir = path.join(work, "dead-backups");
+      const dead = run(bash, [path.join(normalizedRoot(), "panel/backup-panel.sh")], bashEnv({
+        FAMILY_VPN_PANEL_DIR: sourceDir,
+        FAMILY_VPN_BACKUP_DIR: deadDir,
+        FAMILY_VPN_BACKUP_PUB: pubFile,
+        FAMILY_VPN_BACKUP_ENV: deadEnv,
+        FAMILY_VPN_PANEL_ENV: panelEnv,
+        FAMILY_VPN_BACKUP_STATUS: path.join(work, "dead.status"),
+        FAMILY_VPN_BACKUP_LOG: path.join(work, "dead.log"),
+      }));
+      assert.notEqual(dead.status, 0);
+      assert.match(`${dead.stdout}\n${dead.stderr}`, /UPLOAD_FAIL/);
+      assert.equal(readdirSync(deadDir).some((name) => name.endsWith(".tar.age")), true);
+      assert.equal(`${dead.stdout}\n${dead.stderr}`.includes(s3Secret), false);
+
       const age = run(bash, [path.join(normalizedRoot(), "panel/backup-panel.sh"), "--check-age"], common);
       assert.equal(age.status, 0, age.stdout);
       assert.match(age.stdout, /AGE_OK/);
@@ -317,6 +399,17 @@ describe("panel backup and restore", () => {
       assert.equal(readFileSync(path.join(wgDest, "wg0.conf"), "utf8"), readFileSync(wgConf, "utf8"));
       assert.equal(readFileSync(path.join(wgDest, "agent.json"), "utf8"), readFileSync(agentState, "utf8"));
       assert.equal(existsSync(path.join(wgDest, "family-vpn.sqlite")), false);
+      const wgPlain = path.join(work, "wg-plain.tar");
+      assert.equal(run(tools.age, ["-d", "-i", identity, "-o", wgPlain, archiveName(wgBackup)], {}).status, 0);
+      const wgLocal = path.join(work, "wg-local");
+      const wgPayload = run(
+        bash,
+        [path.join(normalizedRoot(), "panel/restore-wg.sh"), "--payload", wgPlain, "--into", wgLocal],
+        bashEnv({}),
+      );
+      assert.equal(wgPayload.status, 0, `${wgPayload.stdout}\n${wgPayload.stderr}`);
+      assert.equal(readFileSync(path.join(wgLocal, "wg0.conf"), "utf8"), readFileSync(wgConf, "utf8"));
+      assert.equal(readFileSync(path.join(wgLocal, "wg0.conf"), "utf8").includes("AGE-SECRET"), false);
       const wgClash = run(
         bash,
         [path.join(normalizedRoot(), "panel/restore-wg.sh"), "--archive", archiveName(wgBackup), "--identity", identity, "--into", wgDest],

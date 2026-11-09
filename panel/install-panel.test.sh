@@ -8,6 +8,9 @@ PUB=age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
 
 bash -n "$INSTALL"
 bash -n "$ROOT/panel/renew-cert.sh"
+bash -n "$ROOT/panel/push-restore.sh"
+bash -n "$ROOT/panel/restore-panel.sh"
+bash -n "$ROOT/panel/restore-wg.sh"
 bash "$INSTALL" --check
 grep -q 'renew_before_expiry = 2 days' "$INSTALL"
 grep -q -- '--cert-name' "$ROOT/panel/renew-cert.sh"
@@ -16,8 +19,15 @@ grep -q 'caddy reload' "$ROOT/panel/renew-cert.sh"
 
 if grep -E 'wg-quick|iptables|nft |ufw |systemctl (stop|restart|disable)|set -x' \
   "$INSTALL" "$ROOT/panel/renew-cert.sh" "$ROOT/panel/backup-panel.sh" \
-  "$ROOT/panel/restore-panel.sh" "$ROOT/panel/backup-wg.sh" "$ROOT/panel/restore-wg.sh"; then
+  "$ROOT/panel/restore-panel.sh" "$ROOT/panel/backup-wg.sh" "$ROOT/panel/restore-wg.sh" \
+  "$ROOT/panel/push-restore.sh"; then
   echo "installer contains a forbidden mutation or a trace flag" >&2
+  exit 1
+fi
+
+if grep -E 'wg (set|addconf|syncconf)|peer[[:space:]]+delete|--backend' \
+  "$INSTALL" "$ROOT/panel/restore-panel.sh" "$ROOT/panel/push-restore.sh"; then
+  echo "restore can reach WireGuard peers or agent backends" >&2
   exit 1
 fi
 
@@ -86,6 +96,21 @@ FAMILY_VPN_PANEL_DIR="$empty" bash "$INSTALL" --restore "$out/archive.tar.age" -
   --email admin@example.com --ip 203.0.113.5 --backup-pubkey "$PUB" --dry-run >"$out/restore-ok"
 grep -q 'RESTORE_DRY_RUN' "$out/restore-ok"
 test ! -e "$empty/family-vpn.sqlite"
+
+FAMILY_VPN_PANEL_DIR="$empty" bash "$INSTALL" --restore - --decrypted --backup-pubkey "$PUB" \
+  --email admin@example.com --ip 203.0.113.5 --dry-run >"$out/local-key"
+grep -q 'KEY_STAYS_LOCAL' "$out/local-key"
+grep -q 'RESTORE_DRY_RUN' "$out/local-key"
+test ! -e "$empty/family-vpn.sqlite"
+
+set +e
+FAMILY_VPN_PANEL_DIR="$empty" bash "$INSTALL" --restore - --decrypted --identity "$out/id.txt" \
+  --backup-pubkey "$PUB" --email admin@example.com --ip 203.0.113.5 --dry-run \
+  >"$out/key-on-server" 2>"$out/key-on-server.err"
+key_code=$?
+set -e
+[ "$key_code" -ne 0 ]
+grep -q 'KEY_STAYS_LOCAL' "$out/key-on-server.err"
 
 set +e
 FAMILY_VPN_PANEL_DIR="$empty" bash "$INSTALL" --new --ip 203.0.113.5 --email admin@example.com --dry-run \

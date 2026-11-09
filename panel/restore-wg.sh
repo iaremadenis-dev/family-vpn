@@ -7,6 +7,7 @@ PANEL_DIR=$(cd "$(dirname "$0")" && pwd)
 ARCHIVE=""
 IDENTITY=""
 INTO=""
+PAYLOAD=""
 AGE=${FAMILY_VPN_AGE:-age}
 NODE=${FAMILY_VPN_NODE:-node}
 
@@ -33,15 +34,22 @@ while [ $# -gt 0 ]; do
     --archive) ARCHIVE=${2:-}; shift 2 ;;
     --identity) IDENTITY=${2:-}; shift 2 ;;
     --into) INTO=${2:-}; shift 2 ;;
+    --payload) PAYLOAD=${2:-}; shift 2 ;;
     *) die "WG_RESTORE_USAGE" ;;
   esac
 done
 
-[ -n "$ARCHIVE" ] && [ -n "$IDENTITY" ] && [ -n "$INTO" ] || die "WG_RESTORE_USAGE"
-[ -f "$ARCHIVE" ] || die "ARCHIVE_MISSING"
-[ -f "$IDENTITY" ] || die "IDENTITY_MISSING"
-grep -q 'AGE-SECRET-KEY-' "$IDENTITY" || die "IDENTITY_INVALID"
-command -v "$AGE" >/dev/null 2>&1 || die "AGE_MISSING"
+[ -n "$INTO" ] || die "WG_RESTORE_USAGE"
+if [ -n "$PAYLOAD" ]; then
+  [ -f "$PAYLOAD" ] || die "ARCHIVE_MISSING"
+  [ -z "$IDENTITY" ] || die "KEY_STAYS_LOCAL"
+else
+  [ -n "$ARCHIVE" ] || die "WG_RESTORE_USAGE"
+  [ -f "$ARCHIVE" ] || die "ARCHIVE_MISSING"
+  [ -n "$IDENTITY" ] && [ -f "$IDENTITY" ] || die "IDENTITY_MISSING"
+  grep -q 'AGE-SECRET-KEY-' "$IDENTITY" || die "IDENTITY_INVALID"
+  command -v "$AGE" >/dev/null 2>&1 || die "AGE_MISSING"
+fi
 
 if [ -e "$INTO/wg0.conf" ] || [ -e "$INTO/agent.json" ]; then
   die "DATA_EXISTS"
@@ -50,8 +58,12 @@ fi
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/out"
-if ! "$AGE" -d -i "$IDENTITY" -o "$STAGE/payload.tar" "$ARCHIVE" 2>/dev/null; then
-  die "DECRYPT_FAIL"
+if [ -n "$PAYLOAD" ]; then
+  cp "$PAYLOAD" "$STAGE/payload.tar"
+else
+  if ! "$AGE" -d -i "$IDENTITY" -o "$STAGE/payload.tar" "$ARCHIVE" 2>/dev/null; then
+    die "DECRYPT_FAIL"
+  fi
 fi
 if tar -tf "$STAGE/payload.tar" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
   die "TAR_UNSAFE"

@@ -7,6 +7,7 @@ PANEL_DIR=$(cd "$(dirname "$0")" && pwd)
 ARCHIVE=""
 IDENTITY=""
 INTO=""
+PAYLOAD=""
 S3_ENV=${FAMILY_VPN_BACKUP_ENV:-/etc/family-vpn/backup.env}
 AGE=${FAMILY_VPN_AGE:-age}
 NODE=${FAMILY_VPN_NODE:-node}
@@ -53,30 +54,38 @@ while [ $# -gt 0 ]; do
       S3_ENV=${2:-}
       shift 2
       ;;
+    --payload)
+      PAYLOAD=${2:-}
+      shift 2
+      ;;
     *)
       die "RESTORE_USAGE"
       ;;
   esac
 done
 
-[ -n "$ARCHIVE" ] && [ -n "$IDENTITY" ] && [ -n "$INTO" ] || die "RESTORE_USAGE"
-[ -f "$IDENTITY" ] || die "IDENTITY_MISSING"
-if grep -q 'AGE-SECRET-KEY-' "$IDENTITY"; then
-  :
+[ -n "$INTO" ] || die "RESTORE_USAGE"
+if [ -n "$PAYLOAD" ]; then
+  [ -z "$IDENTITY" ] || die "KEY_STAYS_LOCAL"
 else
-  die "IDENTITY_INVALID"
+  [ -n "$ARCHIVE" ] && [ -n "$IDENTITY" ] || die "RESTORE_USAGE"
+  [ -f "$IDENTITY" ] || die "IDENTITY_MISSING"
+  if grep -q 'AGE-SECRET-KEY-' "$IDENTITY"; then
+    :
+  else
+    die "IDENTITY_INVALID"
+  fi
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) ;;
+    *)
+      mode=$(stat -c %a "$IDENTITY" 2>/dev/null || true)
+      if [ -n "$mode" ] && { [ "${mode: -1}" != "0" ] || [ "${mode: -2:1}" != "0" ]; }; then
+        die "IDENTITY_PERMS"
+      fi
+      ;;
+  esac
+  command -v "$AGE" >/dev/null 2>&1 || die "AGE_MISSING"
 fi
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) ;;
-  *)
-    mode=$(stat -c %a "$IDENTITY" 2>/dev/null || true)
-    if [ -n "$mode" ] && { [ "${mode: -1}" != "0" ] || [ "${mode: -2:1}" != "0" ]; }; then
-      die "IDENTITY_PERMS"
-    fi
-    ;;
-esac
-
-command -v "$AGE" >/dev/null 2>&1 || die "AGE_MISSING"
 node_ok || command -v "$PYTHON" >/dev/null 2>&1 || die "ARCHIVE_TOOL_MISSING"
 
 STAGE=$(mktemp -d)
@@ -85,27 +94,35 @@ cleanup() {
 }
 trap cleanup EXIT
 
-LOCAL="$ARCHIVE"
-if [[ "$ARCHIVE" == s3://* ]]; then
-  [ -f "$S3_ENV" ] || die "S3_CONFIG_MISSING"
-  rest=${ARCHIVE#s3://}
-  bucket=${rest%%/*}
-  key=${rest#*/}
-  file_bucket=$("$PYTHON" -c 'import pathlib,sys
+if [ -n "$PAYLOAD" ]; then
+  if [ "$PAYLOAD" = "-" ]; then
+    cat >"$STAGE/payload.tar"
+  else
+    [ -f "$PAYLOAD" ] || die "ARCHIVE_MISSING"
+    cp "$PAYLOAD" "$STAGE/payload.tar"
+  fi
+else
+  LOCAL="$ARCHIVE"
+  if [[ "$ARCHIVE" == s3://* ]]; then
+    [ -f "$S3_ENV" ] || die "S3_CONFIG_MISSING"
+    rest=${ARCHIVE#s3://}
+    bucket=${rest%%/*}
+    key=${rest#*/}
+    file_bucket=$("$PYTHON" -c 'import pathlib,sys
 for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
     if line.startswith("S3_BUCKET="):
         print(line.split("=",1)[1].strip())
 ' "$S3_ENV")
-  [ "$bucket" = "$file_bucket" ] || die "S3_BUCKET_MISMATCH"
-  LOCAL="$STAGE/download.tar.age"
-  "$PYTHON" "$PANEL_DIR/s3_store.py" "$S3_ENV" get "$key" "$LOCAL" || die "DOWNLOAD_FAIL"
+    [ "$bucket" = "$file_bucket" ] || die "S3_BUCKET_MISMATCH"
+    LOCAL="$STAGE/download.tar.age"
+    "$PYTHON" "$PANEL_DIR/s3_store.py" "$S3_ENV" get "$key" "$LOCAL" || die "DOWNLOAD_FAIL"
+  fi
+  [ -f "$LOCAL" ] || die "ARCHIVE_MISSING"
+  if ! "$AGE" -d -i "$IDENTITY" -o "$STAGE/payload.tar" "$LOCAL" 2>"$STAGE/age.err"; then
+    die "DECRYPT_FAIL"
+  fi
 fi
-[ -f "$LOCAL" ] || die "ARCHIVE_MISSING"
-
 mkdir -p "$STAGE/out"
-if ! "$AGE" -d -i "$IDENTITY" -o "$STAGE/payload.tar" "$LOCAL" 2>"$STAGE/age.err"; then
-  die "DECRYPT_FAIL"
-fi
 if tar -tf "$STAGE/payload.tar" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
   die "TAR_UNSAFE"
 fi

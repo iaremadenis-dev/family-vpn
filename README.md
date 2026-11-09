@@ -49,18 +49,20 @@ ssh root@PANEL_IP bash /opt/family-vpn/app/panel/install-panel.sh --new --email 
 
 Если последней успешной отправки нет или ей больше 26 часов, проверка `backup-panel.sh --check-age` завершается с ошибкой. Текст ошибки не содержит ключей и содержимого базы.
 
-Восстановление на чистый Ubuntu с другим IP:
+Восстановление на чистый Ubuntu с другим IP. Приватный ключ `age` остаётся на компьютере администратора: там архив расшифровывается, а на новый сервер по SSH уходит только открытый tar.
 
 ```bash
-scp family-vpn-backup.key root@NEW_IP:/root/family-vpn-backup.key
-scp backup.env root@NEW_IP:/etc/family-vpn/backup.env
-ssh root@NEW_IP bash /opt/family-vpn/app/panel/install-panel.sh \
-  --restore s3://BUCKET/PREFIX/panel/panel-....tar.age \
-  --identity /root/family-vpn-backup.key \
-  --email you@example.com
+bash panel/push-restore.sh \
+  --host root@NEW_IP \
+  --archive panel-....tar.age \
+  --identity family-vpn-backup.key \
+  --email you@example.com \
+  --no-sudo
 ```
 
-Команда проверяет контрольные суммы, версию схемы и то, что `master.key` открывает клиентские секреты. Запись в каталог данных происходит только после этого. Если там уже есть другая база, она не меняется. После успешного восстановления с сервера удаляется копия ключа расшифровки, выпускается новый сертификат на новый IP, а адреса WireGuard-серверов не переписываются.
+На сервере к этому моменту уже лежит копия репозитория в `/opt/family-vpn/app`, без файла ключа. Команда проверяет контрольные суммы, версию схемы и то, что `master.key` открывает клиентские секреты. Запись в каталог данных происходит только после этого. Если там уже есть другая база, она не меняется. Затем выпускается новый сертификат на новый IP. Адреса WireGuard-серверов и их peers не переписываются, агенты сами на новую панель не переключаются.
+
+Файл `backup.env` для следующих копий копируется отдельно. Это ключи хранилища, не ключ `age`.
 
 Архив самого WireGuard-сервера отдельный. На этом сервере, не останавливая интерфейс:
 
@@ -69,7 +71,7 @@ sudo bash panel/backup-wg.sh
 sudo bash panel/backup-wg.sh --install-timer
 ```
 
-В него входят `wg0.conf`, `agent.json` и unit агента, если он есть. Восстановление в пустой каталог: `panel/restore-wg.sh --archive wg-....tar.age --identity family-vpn-backup.key --into /путь`. Эта команда не запускает WireGuard и не смешивается с архивом панели.
+В него входят `wg0.conf`, `agent.json` и unit агента, если он есть. На компьютере администратора архив открывается локально, а на сервер передаётся уже расшифрованный tar: `panel/restore-wg.sh --payload wg.tar --into /путь`. Эта команда не запускает WireGuard и не смешивается с архивом панели.
 
 Установщик не останавливает `wg0`, не правит `wg0.conf` и не переписывает firewall. TCP 80 и 443 должны быть доступны для выпуска сертификата.
 

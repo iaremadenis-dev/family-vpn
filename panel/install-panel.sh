@@ -2,7 +2,8 @@
 # Install a new Family VPN panel on Ubuntu 24.04.
 # HTTPS is a Let's Encrypt certificate for the public IPv4 (shortlived, 160 hours).
 # The script does not stop WireGuard, edit wg0.conf, or rewrite the firewall.
-# --restore decrypts an age archive onto this host and issues a new IP certificate.
+# --restore - --decrypted reads a tar already decrypted on the administrator's computer.
+# --restore <archive> --identity remains available and then deletes that key copy.
 set -euo pipefail
 umask 077
 
@@ -24,6 +25,7 @@ PANEL_IP=${FAMILY_VPN_PANEL_IP:-}
 EMAIL=""
 STAGING=0
 DRY_RUN=0
+DECRYPTED=0
 BACKUP_PUBKEY=""
 BACKUP_PUBKEY_FILE=""
 IDENTITY=""
@@ -53,6 +55,7 @@ usage() {
   cat <<'EOF'
 usage:
   install-panel.sh --new --email admin@example.com --backup-pubkey age1... [--ip A.B.C.D] [--staging] [--dry-run]
+  install-panel.sh --restore - --decrypted --backup-pubkey age1... --email admin@example.com [--ip A.B.C.D]
   install-panel.sh --restore <archive> --identity <age-key> --email admin@example.com [--ip A.B.C.D]
   install-panel.sh --setup-token
   install-panel.sh --check
@@ -377,22 +380,33 @@ cmd_setup_token() {
 }
 
 cmd_restore() {
-  local archive=${1:-}
-  [ -n "$archive" ] || die "usage: install-panel.sh --restore <archive> --identity <file>"
-  [ -n "$IDENTITY" ] || die "укажите --identity с файлом приватного ключа age"
+  local archive=${1:-} payload="" code=0
+  [ -n "$archive" ] || die "usage: install-panel.sh --restore <archive> --email <address>"
   [ -n "$EMAIL" ] || die "укажите --email для учётки Let's Encrypt"
   valid_email "$EMAIL" || die "адрес --email выглядит неверно"
+  if [ "$DECRYPTED" -eq 1 ]; then
+    if [ "$archive" != "-" ] && [ ! -f "$archive" ]; then
+      die "ARCHIVE_MISSING"
+    fi
+    [ -z "$IDENTITY" ] || die "KEY_STAYS_LOCAL"
+    resolve_pubkey
+  else
+    if [[ "$archive" != s3://* ]] && [ ! -f "$archive" ]; then
+      die "ARCHIVE_MISSING"
+    fi
+    [ -n "$IDENTITY" ] || die "укажите --identity с файлом приватного ключа age"
+    [ -f "$IDENTITY" ] || die "IDENTITY_MISSING"
+  fi
   if [ -z "$PANEL_IP" ]; then
     PANEL_IP=$(detect_public_ipv4) || die "не удалось определить публичный IPv4; укажите --ip"
   fi
   is_public_ipv4 "$PANEL_IP" || die "PRIVATE_IP: $PANEL_IP не является публичным IPv4"
-  if [[ "$archive" != s3://* ]] && [ ! -f "$archive" ]; then
-    die "ARCHIVE_MISSING"
-  fi
-  [ -f "$IDENTITY" ] || die "IDENTITY_MISSING"
 
   if [ "$DRY_RUN" -eq 1 ]; then
     refuse_existing_data
+    if [ "$DECRYPTED" -eq 1 ]; then
+      log "KEY_STAYS_LOCAL"
+    fi
     log "RESTORE_DRY_RUN ip=$PANEL_IP"
     log "Архив будет проверен до записи. Существующая база не перезаписывается."
     log "После восстановления выпускается новый сертификат на этот IP."
@@ -400,27 +414,46 @@ cmd_restore() {
     exit 0
   fi
 
+  if [ "$DECRYPTED" -eq 1 ] && [ "$archive" = "-" ]; then
+    payload=$(mktemp)
+    chmod 600 "$payload" 2>/dev/null || true
+    cat >"$payload"
+    archive=$payload
+  fi
+
   prepare_host
   install_packages
   set +e
-  bash "$PANEL_DIR/restore-panel.sh" --archive "$archive" --identity "$IDENTITY" --into "$STATE_DIR"
-  local code=$?
+  if [ "$DECRYPTED" -eq 1 ]; then
+    bash "$PANEL_DIR/restore-panel.sh" --payload "$archive" --into "$STATE_DIR"
+  else
+    bash "$PANEL_DIR/restore-panel.sh" --archive "$archive" --identity "$IDENTITY" --into "$STATE_DIR"
+  fi
+  code=$?
   set -e
+  if [ -n "$payload" ]; then
+    rm -f "$payload"
+  fi
   if [ "$code" -eq 3 ]; then
     log "DATA_EXISTS: в $STATE_DIR уже другая база. Она не изменена."
     exit 3
   fi
   [ "$code" -eq 0 ] || die "RESTORE_FAIL"
 
-  BACKUP_PUBKEY=$("$AGE_KEYGEN" -y "$IDENTITY")
-  save_pubkey
-  if [ "${FAMILY_VPN_KEEP_IDENTITY:-}" != "1" ]; then
-    if command -v shred >/dev/null 2>&1; then
-      shred -u "$IDENTITY" 2>/dev/null || rm -f "$IDENTITY"
-    else
-      rm -f "$IDENTITY"
+  if [ "$DECRYPTED" -eq 1 ]; then
+    save_pubkey
+    log "Приватный ключ age на этот сервер не передавался."
+  else
+    BACKUP_PUBKEY=$("$AGE_KEYGEN" -y "$IDENTITY")
+    save_pubkey
+    if [ "${FAMILY_VPN_KEEP_IDENTITY:-}" != "1" ]; then
+      if command -v shred >/dev/null 2>&1; then
+        shred -u "$IDENTITY" 2>/dev/null || rm -f "$IDENTITY"
+      else
+        rm -f "$IDENTITY"
+      fi
+      log "Копия ключа расшифровки на этом сервере удалена."
     fi
-    log "Копия ключа расшифровки на этом сервере удалена."
   fi
   set +e
   admin_exists
@@ -448,6 +481,7 @@ cmd_check() {
     "$PANEL_DIR/restore-panel.sh" \
     "$PANEL_DIR/backup-wg.sh" \
     "$PANEL_DIR/restore-wg.sh" \
+    "$PANEL_DIR/push-restore.sh" \
     "$PANEL_DIR/archive-tool.mjs" \
     "$PANEL_DIR/s3_store.py" \
     "$PANEL_DIR/archive_host.py" \
@@ -476,6 +510,9 @@ cmd_check() {
   grep -q 'UPLOAD_OK' "$PANEL_DIR/backup-panel.sh"
   grep -q 'DATA_EXISTS' "$PANEL_DIR/restore-panel.sh"
   grep -q 'DECRYPT_FAIL' "$PANEL_DIR/restore-panel.sh"
+  grep -q 'KEY_STAYS_LOCAL' "$PANEL_DIR/restore-panel.sh"
+  grep -q 'KEY_STAYS_LOCAL' "$PANEL_DIR/push-restore.sh"
+  grep -q -- '--decrypted' "$PANEL_DIR/install-panel.sh"
   is_public_ipv4 203.0.113.5 || die "public IP check failed"
   if is_public_ipv4 10.1.2.3 || is_public_ipv4 127.0.0.1 || is_public_ipv4 192.168.1.1; then
     die "private IP was accepted"
@@ -569,6 +606,10 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || die "укажите файл после --identity"
       IDENTITY=$2
       shift 2
+      ;;
+    --decrypted)
+      DECRYPTED=1
+      shift
       ;;
     --setup-token)
       [ -z "$MODE" ] || die "укажите только один режим"
