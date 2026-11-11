@@ -15,7 +15,12 @@ bash "$INSTALL" --check
 grep -q 'renew_before_expiry = 2 days' "$INSTALL"
 grep -q -- '--cert-name' "$ROOT/panel/renew-cert.sh"
 grep -q 'checkend 172800' "$ROOT/panel/renew-cert.sh"
-grep -q 'caddy reload' "$ROOT/panel/renew-cert.sh"
+grep -q 'caddy reload --address 127.0.0.1:2019' "$ROOT/panel/renew-cert.sh"
+grep -q 'caddy reload --address 127.0.0.1:2019' "$INSTALL"
+grep -q 'admin 127.0.0.1:2019' "$ROOT/panel/Caddyfile.bootstrap"
+grep -q 'admin 127.0.0.1:2019' "$ROOT/panel/Caddyfile.https"
+grep -q 'default_sni __PANEL_IP__' "$ROOT/panel/Caddyfile.https"
+grep -q '^https://__PANEL_IP__ {$' "$ROOT/panel/Caddyfile.https"
 
 if grep -E 'wg-quick|iptables|nft |ufw |systemctl (stop|restart|disable)|set -x' \
   "$INSTALL" "$ROOT/panel/renew-cert.sh" "$ROOT/panel/backup-panel.sh" \

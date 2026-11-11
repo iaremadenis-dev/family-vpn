@@ -51,7 +51,7 @@ openssl x509 -in /var/lib/family-vpn/certs/fullchain.pem -noout -ext subjectAltN
   || fail "certificate is not issued for ${PANEL_IP}"
 
 docker compose --project-directory "$COMPOSE_PROJECT_DIR" -f "$COMPOSE_FILE" \
-  exec -T caddy caddy reload --config /etc/caddy/Caddyfile \
+  exec -T caddy caddy reload --address 127.0.0.1:2019 --config /etc/caddy/Caddyfile \
   || fail "caddy reload failed"
 
 printf '%s OK %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PANEL_IP" >"$STATUS"

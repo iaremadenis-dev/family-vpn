@@ -326,7 +326,7 @@ start_https() {
 
   issue_certificate
   render_caddy "$PANEL_DIR/Caddyfile.https"
-  compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+  compose exec -T caddy caddy reload --address 127.0.0.1:2019 --config /etc/caddy/Caddyfile
   install_renewal
   install_backup
 

@@ -1,6 +1,7 @@
 {
 	auto_https off
-	admin off
+	admin 127.0.0.1:2019
+	default_sni __PANEL_IP__
 }
 
 http://__PANEL_IP__ {
