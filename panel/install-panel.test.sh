@@ -7,6 +7,7 @@ INSTALL="$ROOT/panel/install-panel.sh"
 PUB=age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
 
 bash -n "$INSTALL"
+grep -q 'install -o 1001 -g 1001 -m 600' "$INSTALL"
 bash -n "$ROOT/panel/install-from-pc.sh"
 bash -n "$ROOT/panel/renew-cert.sh"
 bash -n "$ROOT/panel/push-restore.sh"
@@ -127,7 +128,25 @@ set -e
 grep -q 'PUBKEY_MISSING' "$out/nopub.err"
 
 token_dir=$(mktemp -d)
-token_out=$(FAMILY_VPN_PANEL_DIR="$token_dir" bash "$INSTALL" --setup-token)
+owner_log=$(mktemp)
+owner_bin=$(mktemp -d)
+real_install=$(command -v install)
+real_id=$(command -v id)
+cat >"$owner_bin/install" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >>"$owner_log"
+exec "$real_install" "\$@"
+EOF
+cat >"$owner_bin/id" <<EOF
+#!/bin/bash
+if [ "\${1:-}" = "-u" ]; then
+  printf '0\n'
+  exit 0
+fi
+exec "$real_id" "\$@"
+EOF
+chmod +x "$owner_bin/install" "$owner_bin/id"
+token_out=$(PATH="$owner_bin:$PATH" FAMILY_VPN_PANEL_DIR="$token_dir" bash "$INSTALL" --setup-token)
 token=$(printf '%s\n' "$token_out" | sed -n 's/^SETUP_TOKEN=//p')
 [ -n "$token" ]
 stored=$(tr -d '\r\n' <"$token_dir/setup-token.sha256")
@@ -141,7 +160,15 @@ if grep -q "$token" "$INSTALL"; then
   echo "activation token was written into the installer" >&2
   exit 1
 fi
-second_out=$(FAMILY_VPN_PANEL_DIR="$token_dir" bash "$INSTALL" --setup-token)
+if ! grep -q -- '-o 1001 -g 1001 -m 600' "$owner_log"; then
+  echo "setup-token.sha256 was not created as uid 1001 mode 600" >&2
+  exit 1
+fi
+if ! grep -F -q -- "$token_dir/setup-token.sha256" "$owner_log"; then
+  echo "setup-token.sha256 was not the install target" >&2
+  exit 1
+fi
+second_out=$(PATH="$owner_bin:$PATH" FAMILY_VPN_PANEL_DIR="$token_dir" bash "$INSTALL" --setup-token)
 second=$(printf '%s\n' "$second_out" | sed -n 's/^SETUP_TOKEN=//p')
 [ -n "$second" ]
 [ "$second" != "$token" ]
@@ -152,6 +179,8 @@ if [ "$(printf '%s' "$token" | sha256sum | awk '{print $1}')" = "$stored" ]; the
   echo "the previous activation code still matches" >&2
   exit 1
 fi
+owner_calls=$(grep -c -- '-o 1001 -g 1001 -m 600' "$owner_log" || true)
+[ "$owner_calls" -ge 2 ]
 
 admin_dir=$(mktemp -d)
 if command -v python3 >/dev/null 2>&1; then
@@ -215,7 +244,8 @@ if grep -q 'AGE-SECRET-KEY-' "$out/restore-ship"; then
 fi
 rm -f "$ident" "$archive_file"
 
-rm -rf "$token_dir" "$admin_dir"
+rm -rf "$token_dir" "$admin_dir" "$owner_bin"
+rm -f "$owner_log"
 
 rm -rf "$data" "$empty" "$out"
 

@@ -303,10 +303,18 @@ print(token)
 print(hashlib.sha256(token.encode()).hexdigest())')
   token=${pair%%$'\n'*}
   hash=${pair#*$'\n'}
+  hash_file=$(mktemp)
+  printf '%s\n' "$hash" >"$hash_file"
   mkdir -p "$STATE_DIR"
   chmod 700 "$STATE_DIR" 2>/dev/null || true
-  printf '%s\n' "$hash" >"$STATE_DIR/setup-token.sha256"
-  chmod 600 "$STATE_DIR/setup-token.sha256" 2>/dev/null || true
+  # Create the hash as the panel user. A root-owned mode 600 file is unreadable in the container.
+  if [ "$(id -u)" -eq 0 ]; then
+    install -o 1001 -g 1001 -m 600 "$hash_file" "$STATE_DIR/setup-token.sha256"
+  else
+    install -m 600 "$hash_file" "$STATE_DIR/setup-token.sha256"
+    chmod 600 "$STATE_DIR/setup-token.sha256" 2>/dev/null || true
+  fi
+  rm -f "$hash_file"
   ACTIVATION_CODE=$token
 }
 

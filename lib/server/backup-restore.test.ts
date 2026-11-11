@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { requestBackup } from "@/lib/server/backup-request";
 import { SCHEMA_VERSION, getDb, resetDbForTests } from "@/lib/server/db";
 import { decryptSecret, encryptSecret } from "@/lib/server/secret";
+import { verifyAdminPassword } from "@/lib/server/admin";
 import { assertSetupToken, completeSetup } from "@/lib/server/setup-token";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -85,6 +86,8 @@ describe("panel backup and restore", () => {
     const good = randomBytes(16).toString("hex");
     writeFileSync(path.join(activationDir, "setup-token.sha256"), createHash("sha256").update(good).digest("hex"));
     completeSetup("Ada", "correct-horse-1", good);
+    assert.equal(verifyAdminPassword("correct-horse-1"), true);
+    assert.equal(verifyAdminPassword("other-password-1"), false);
     assert.equal(existsSync(path.join(activationDir, "setup-token.sha256")), false);
     const row = getDb().prepare("SELECT display_name FROM admin WHERE id = 1").get();
     assert.equal(row?.display_name, "Ada");
