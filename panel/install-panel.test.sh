@@ -196,6 +196,25 @@ set -e
 [ "$ship_code" -ne 0 ]
 grep -q 'PRIVATE_KEY_REFUSED' "$out/ship-key.err"
 
+ident=$(mktemp)
+archive_file=$(mktemp)
+printf 'AGE-SECRET-KEY-1testonly\n' >"$ident"
+printf 'archive\n' >"$archive_file"
+bash "$ROOT/panel/install-from-pc.sh" --dry-run --restore --host root@203.0.113.5 --email admin@example.com \
+  --archive "$archive_file" --identity "$ident" >"$out/restore-ship"
+grep -q 'KEY_STAYS_LOCAL' "$out/restore-ship"
+grep -q -- '--restore' "$out/restore-ship"
+grep -q -- '--decrypted' "$out/restore-ship"
+if grep -F -q -- "$ident" "$out/restore-ship"; then
+  echo "age identity path leaked into the remote command" >&2
+  exit 1
+fi
+if grep -q 'AGE-SECRET-KEY-' "$out/restore-ship"; then
+  echo "age private key leaked into the remote command" >&2
+  exit 1
+fi
+rm -f "$ident" "$archive_file"
+
 rm -rf "$token_dir" "$admin_dir"
 
 rm -rf "$data" "$empty" "$out"
