@@ -21,6 +21,7 @@ COMPOSE_FILE="$PANEL_DIR/docker-compose.yml"
 LOG_FILE=/var/log/family-vpn-install.log
 
 MODE=""
+ACTIVATION_CODE=""
 PANEL_IP=${FAMILY_VPN_PANEL_IP:-}
 EMAIL=""
 STAGING=0
@@ -60,8 +61,9 @@ usage:
   install-panel.sh --setup-token
   install-panel.sh --check
 
---new prints a one-time activation code and does not accept an administrator password.
---restore decrypts a panel archive, keeps the administrator, and issues a certificate for this IP.
+--new prints a one-time activation code after HTTPS checks succeed. It does not accept an administrator password.
+--restore keeps the administrator from the archive and issues a certificate for this IP.
+--setup-token replaces the activation code when the first administrator does not exist yet. It does not delete SQLite.
 The age private key is read from a file and removed from this host after a successful restore.
 WireGuard servers are not changed.
 EOF
@@ -97,7 +99,16 @@ refuse_existing_data() {
     log "DATA_EXISTS: база панели уже есть в $STATE_DIR. Установщик её не изменяет."
     log "Повторная установка не стирает SQLite и master.key."
     log "Обновление уже установленной панели этим режимом не выполняется."
-    log "Восстановление из архива, когда оно будет готово: install-panel.sh --restore <архив>"
+    log "Восстановление из архива: $0 --restore <архив>"
+    if [ -f "$STATE_DIR/family-vpn.sqlite" ]; then
+      set +e
+      admin_exists
+      local admin_code=$?
+      set -e
+      if [ "$admin_code" -eq 1 ]; then
+        log "Администратор ещё не создан. Новый код без удаления базы: $0 --setup-token"
+      fi
+    fi
     exit 3
   fi
 }
@@ -280,6 +291,7 @@ resolve_pubkey() {
 
 issue_setup_token() {
   local pair token hash
+  set +x
   if ! command -v "$PYTHON" >/dev/null 2>&1; then
     apt-get update
     apt-get install -y python3
@@ -291,10 +303,111 @@ print(token)
 print(hashlib.sha256(token.encode()).hexdigest())')
   token=${pair%%$'\n'*}
   hash=${pair#*$'\n'}
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR" 2>/dev/null || true
   printf '%s\n' "$hash" >"$STATE_DIR/setup-token.sha256"
   chmod 600 "$STATE_DIR/setup-token.sha256" 2>/dev/null || true
-  printf '%s\n' "SETUP_TOKEN=${token}"
-  printf '%s\n' "Код активации показан один раз и в журнал не пишется."
+  ACTIVATION_CODE=$token
+}
+
+load_panel_ip() {
+  local saved
+  if [ -n "$PANEL_IP" ]; then
+    return 0
+  fi
+  if [ -f "$ETC_DIR/renew.env" ]; then
+    saved=$(sed -n 's/^PANEL_IP=//p' "$ETC_DIR/renew.env" | head -n 1)
+    if [ -n "$saved" ]; then
+      PANEL_IP=$saved
+    fi
+  fi
+}
+
+print_activation_code() {
+  local code=$1
+  set +x
+  if [ -t 1 ] && [ "${TERM:-}" != "dumb" ]; then
+    printf '       \033[1;93m%s\033[0m\n\n' "$code"
+  else
+    printf 'SETUP_TOKEN=%s\n' "$code"
+  fi
+}
+
+show_installed() {
+  local code=$1
+  local url="/login"
+  set +x
+  if [ -n "$PANEL_IP" ]; then
+    url="https://${PANEL_IP}/login"
+  fi
+  if [ -t 1 ]; then
+    printf '\n========================================\n'
+    printf '       FAMILY VPN — УСТАНОВЛЕНО\n'
+    printf '========================================\n\n'
+    printf 'Панель: %s\n' "$url"
+    printf 'HTTPS: OK\n'
+    printf 'Docker: OK\n'
+    printf 'База данных: OK\n\n'
+    printf 'КОД АКТИВАЦИИ АДМИНИСТРАТОРА:\n\n'
+    print_activation_code "$code"
+    printf '========================================\n\n'
+    printf 'Открой панель, введи этот код\n'
+    printf 'и создай пароль администратора.\n\n'
+    printf '========================================\n'
+  else
+    print_activation_code "$code"
+  fi
+}
+
+show_reissued() {
+  local code=$1
+  set +x
+  if [ -t 1 ]; then
+    printf '\n========================================\n'
+    printf '   FAMILY VPN — НОВЫЙ КОД АКТИВАЦИИ\n'
+    printf '========================================\n\n'
+    printf 'Прежний код больше не действует.\n'
+    printf 'База данных не изменялась.\n\n'
+    if [ -n "$PANEL_IP" ]; then
+      printf 'Панель: https://%s/login\n\n' "$PANEL_IP"
+    fi
+    printf 'КОД АКТИВАЦИИ АДМИНИСТРАТОРА:\n\n'
+    print_activation_code "$code"
+    printf '========================================\n\n'
+    printf 'Открой панель, введи этот код\n'
+    printf 'и создай пароль администратора.\n\n'
+    printf '========================================\n'
+  else
+    print_activation_code "$code"
+  fi
+}
+
+tls_handshake() {
+  local label=$1
+  shift
+  local output
+  set +e
+  output=$(printf '\n' | openssl s_client -connect "${PANEL_IP}:443" "$@" 2>&1)
+  set -e
+  if printf '%s\n' "$output" | grep -q 'alert number 80'; then
+    die "TLS ${label}: alert 80. Данные в $STATE_DIR не удалялись."
+  fi
+  if [ "$STAGING" -eq 0 ]; then
+    printf '%s\n' "$output" | grep -q 'Verify return code: 0 (ok)' \
+      || die "TLS ${label}: сертификат не прошёл проверку. Данные в $STATE_DIR не удалялись."
+  else
+    printf '%s\n' "$output" | grep -q 'Server certificate' \
+      || die "TLS ${label}: рукопожатие не завершилось. Данные в $STATE_DIR не удалялись."
+  fi
+}
+
+confirm_stack() {
+  docker ps --format '{{.Names}}' | grep -q 'family-vpn-panel' \
+    || die "контейнер панели не запущен. Данные в $STATE_DIR не удалялись."
+  docker ps --format '{{.Names}}' | grep -q 'family-vpn-caddy' \
+    || die "контейнер Caddy не запущен. Данные в $STATE_DIR не удалялись."
+  [ -s "$STATE_DIR/family-vpn.sqlite" ] \
+    || die "база панели не создана. Каталог $STATE_DIR не очищался."
 }
 
 admin_exists() {
@@ -326,18 +439,24 @@ start_https() {
 
   issue_certificate
   render_caddy "$PANEL_DIR/Caddyfile.https"
-  compose exec -T caddy caddy reload --address 127.0.0.1:2019 --config /etc/caddy/Caddyfile
+  compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile \
+    || die "Caddy отклонил конфигурацию. Данные в $STATE_DIR не удалялись."
+  compose exec -T caddy caddy reload --address 127.0.0.1:2019 --config /etc/caddy/Caddyfile \
+    || die "Caddy не перезагрузил конфигурацию. Данные в $STATE_DIR не удалялись."
   install_renewal
   install_backup
 
   local -a curl_tls=()
+  local status
   if [ "$STAGING" -eq 1 ]; then
     curl_tls=(--insecure)
     log "проверка staging смотрит только ответ панели: цепочку доверия агенты проверяют сами"
   fi
-  if ! curl -fsS "${curl_tls[@]}" --max-time 20 "https://${PANEL_IP}/login" >/dev/null; then
-    die "панель не ответила на https://${PANEL_IP}/login. Данные в $STATE_DIR не удалялись."
-  fi
+  status=$(curl -sS "${curl_tls[@]}" --max-time 20 -o /dev/null -w '%{http_code}' "https://${PANEL_IP}/login" || true)
+  [ "$status" = "200" ] || die "панель не ответила HTTP 200 на https://${PANEL_IP}/login. Данные в $STATE_DIR не удалялись."
+  tls_handshake "с SNI" -servername "$PANEL_IP"
+  tls_handshake "без SNI" -noservername
+  confirm_stack
 }
 
 prepare_host() {
@@ -376,7 +495,9 @@ cmd_setup_token() {
   if [ "$code" -eq 2 ]; then
     die "SQLITE_UNREADABLE"
   fi
+  load_panel_ip
   issue_setup_token
+  show_reissued "$ACTIVATION_CODE"
 }
 
 cmd_restore() {
@@ -459,12 +580,22 @@ cmd_restore() {
   admin_exists
   code=$?
   set -e
+  if [ "$code" -eq 2 ]; then
+    die "SQLITE_UNREADABLE"
+  fi
+  local fresh_code=0
   if [ "$code" -eq 1 ]; then
     issue_setup_token
+    fresh_code=1
   fi
   start_https
-  log "RESTORE_OK https://${PANEL_IP}/login"
   log "AGENTS_UNCHANGED: адреса агентов этой командой не менялись."
+  if [ "$fresh_code" -eq 1 ]; then
+    show_installed "$ACTIVATION_CODE"
+  else
+    log "RESTORE_OK https://${PANEL_IP}/login"
+    log "Администратор и его пароль сохранены. Код активации не требуется."
+  fi
 }
 
 cmd_check() {
@@ -505,6 +636,9 @@ cmd_check() {
   grep -q 'IP Address:' "$PANEL_DIR/renew-cert.sh"
   grep -q 'certbot>=5.4' "$PANEL_DIR/certbot-requirements.txt"
   grep -q 'preferred-profile shortlived' "$PANEL_DIR/install-panel.sh"
+  grep -q 'FAMILY VPN — УСТАНОВЛЕНО' "$PANEL_DIR/install-panel.sh"
+  grep -q -- '-noservername' "$PANEL_DIR/install-panel.sh"
+  grep -q 'default_sni __PANEL_IP__' "$PANEL_DIR/Caddyfile.https"
   grep -q 'KEY_MISMATCH' "$PANEL_DIR/archive-tool.mjs"
   grep -q 'SCHEMA_MAX = 3' "$PANEL_DIR/archive-tool.mjs"
   grep -q 'UPLOAD_OK' "$PANEL_DIR/backup-panel.sh"
@@ -547,11 +681,8 @@ cmd_new() {
   save_pubkey
   issue_setup_token
   start_https
-  log "Панель слушает https://${PANEL_IP}/login"
-  log "Создайте администратора в браузере. Установщик пароль не видит и не записывает."
-  log "База и master.key остаются в $STATE_DIR."
-  log "Продление сертификата: systemctl status family-vpn-cert-renew.timer"
-  log "Сбой продления пишется в /var/lib/family-vpn/cert-renew.status и в journalctl -u family-vpn-cert-renew.service"
+  log "Продление сертификата включено: family-vpn-cert-renew.timer"
+  show_installed "$ACTIVATION_CODE"
 }
 
 while [ $# -gt 0 ]; do

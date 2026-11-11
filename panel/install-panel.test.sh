@@ -7,6 +7,7 @@ INSTALL="$ROOT/panel/install-panel.sh"
 PUB=age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
 
 bash -n "$INSTALL"
+bash -n "$ROOT/panel/install-from-pc.sh"
 bash -n "$ROOT/panel/renew-cert.sh"
 bash -n "$ROOT/panel/push-restore.sh"
 bash -n "$ROOT/panel/restore-panel.sh"
@@ -37,7 +38,7 @@ if grep -E 'wg (set|addconf|syncconf)|peer[[:space:]]+delete|--backend' \
 fi
 
 if grep -E 'ghp_|github_pat_|BEGIN .*PRIVATE KEY|AKIA[0-9A-Z]{16}' \
-  "$INSTALL" "$ROOT/panel/renew-cert.sh" "$ROOT/panel/docker-compose.yml" \
+  "$INSTALL" "$ROOT/panel/install-from-pc.sh" "$ROOT/panel/renew-cert.sh" "$ROOT/panel/docker-compose.yml" \
   "$ROOT/panel/Caddyfile.bootstrap" "$ROOT/panel/Caddyfile.https"; then
   echo "installer tree contains a secret" >&2
   exit 1
@@ -136,7 +137,66 @@ if grep -q "$token" "$token_dir/setup-token.sha256"; then
   echo "activation token was stored in clear text" >&2
   exit 1
 fi
-rm -rf "$token_dir"
+if grep -q "$token" "$INSTALL"; then
+  echo "activation token was written into the installer" >&2
+  exit 1
+fi
+second_out=$(FAMILY_VPN_PANEL_DIR="$token_dir" bash "$INSTALL" --setup-token)
+second=$(printf '%s\n' "$second_out" | sed -n 's/^SETUP_TOKEN=//p')
+[ -n "$second" ]
+[ "$second" != "$token" ]
+stored=$(tr -d '\r\n' <"$token_dir/setup-token.sha256")
+want=$(printf '%s' "$second" | sha256sum | awk '{print $1}')
+[ "$stored" = "$want" ]
+if [ "$(printf '%s' "$token" | sha256sum | awk '{print $1}')" = "$stored" ]; then
+  echo "the previous activation code still matches" >&2
+  exit 1
+fi
+
+admin_dir=$(mktemp -d)
+if command -v python3 >/dev/null 2>&1; then
+  PY=python3
+elif command -v python >/dev/null 2>&1; then
+  PY=python
+else
+  echo "python is required to build the admin fixture" >&2
+  exit 1
+fi
+"$PY" -c 'import sqlite3,sys
+connection = sqlite3.connect(sys.argv[1])
+connection.execute("create table admin (id integer primary key, display_name text, password_hash text, created_at text)")
+connection.execute("insert into admin values (1, \"Ada\", \"hash\", \"t\")")
+connection.commit()' "$admin_dir/family-vpn.sqlite"
+set +e
+FAMILY_VPN_PANEL_DIR="$admin_dir" bash "$INSTALL" --setup-token >"$out/admin-token" 2>"$out/admin-token.err"
+admin_code=$?
+set -e
+[ "$admin_code" -ne 0 ]
+grep -q 'ADMIN_EXISTS' "$out/admin-token.err"
+test ! -e "$admin_dir/setup-token.sha256"
+test -f "$admin_dir/family-vpn.sqlite"
+
+awk '
+  /^cmd_new\(\)/ { inside=1 }
+  inside && /^}/ { exit }
+  inside && /start_https/ { started=1 }
+  inside && /show_installed/ && !started { print "activation banner is shown before HTTPS checks" > "/dev/stderr"; exit 1 }
+' "$INSTALL"
+
+bash "$ROOT/panel/install-from-pc.sh" --dry-run --host root@203.0.113.5 --email admin@example.com --backup-pubkey "$PUB" \
+  >"$out/ship"
+grep -q 'PASSWORD_IN_TERMINAL' "$out/ship"
+grep -q 'SHIP git-archive' "$out/ship"
+grep -q -- '--new' "$out/ship"
+set +e
+bash "$ROOT/panel/install-from-pc.sh" --dry-run --host root@203.0.113.5 --email admin@example.com \
+  --backup-pubkey 'AGE-SECRET-KEY-1testonly' >"$out/ship-key" 2>"$out/ship-key.err"
+ship_code=$?
+set -e
+[ "$ship_code" -ne 0 ]
+grep -q 'PRIVATE_KEY_REFUSED' "$out/ship-key.err"
+
+rm -rf "$token_dir" "$admin_dir"
 
 rm -rf "$data" "$empty" "$out"
 
