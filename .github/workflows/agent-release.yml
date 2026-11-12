@@ -27,32 +27,53 @@ jobs:
           go-version: "1.22.x"
           cache-dependency-path: agent/go.mod
 
-      - name: Go tests
+      - name: Go tests (required before release build)
         working-directory: agent
-        run: go test ./...
+        run: |
+          set -euo pipefail
+          go version | grep -E 'go1\.22'
+          go test -count=1 ./...
+          # Race detector needs cgo; keep it after the plain suite so plain failures stay clear.
+          CGO_ENABLED=1 go test -count=1 -race ./...
 
-      - name: Installer shell checks
+      - name: Installer and isolation shell checks
         run: |
           bash -n installer/install.sh
           bash -n installer/install-from-panel.sh
           bash installer/preserve-wg.test.sh
           bash installer/update-mode.test.sh
           bash installer/install-from-panel.test.sh
+          bash installer/client-isolation.test.sh
 
-      - name: Build release artifacts
+      - name: Build Linux amd64 agent and signed release artifacts
         env:
           FAMILY_VPN_PUBLIC_URL: http://127.0.0.1:13010
           VERSION: "0.5.0"
           FAMILY_VPN_RELEASE_SIGNING_KEY: ${{ secrets.FAMILY_VPN_RELEASE_SIGNING_KEY }}
         run: bash scripts/build-release.sh
 
-      - name: Verify checksums and agent version
+      - name: Verify checksums, version, and release signature
         run: |
+          set -euo pipefail
           (cd releases && sha256sum -c SHA256SUMS)
           chmod +x releases/family-vpn-agent-linux-amd64
           test "$(releases/family-vpn-agent-linux-amd64 --version)" = "0.5.0"
           test "$(releases/family-vpn-agent-linux-amd64 version)" = "0.5.0"
+          file releases/family-vpn-agent-linux-amd64 | grep -E 'ELF 64-bit|LSB executable|static'
           test -f releases/release-signing.pub
+          if [ -f releases/install.sh.sig ]; then
+            bash scripts/release-signing.test.sh
+            FP=$(sha256sum releases/release-signing.pub | awk '{print $1}')
+            node scripts/verify-release-file.mjs releases/install.sh releases/install.sh.sig releases/release-signing.pub "$FP"
+            cp releases/install.sh /tmp/install.tampered
+            echo tamper >> /tmp/install.tampered
+            if node scripts/verify-release-file.mjs /tmp/install.tampered releases/install.sh.sig releases/release-signing.pub "$FP"; then
+              echo "tampered install.sh was accepted" >&2
+              exit 1
+            fi
+          else
+            echo "WARNING: install.sh.sig missing; set FAMILY_VPN_RELEASE_SIGNING_KEY for signed releases" >&2
+          fi
           grep -F -- '--update' releases/INSTALL.txt
           cat releases/SHA256SUMS
           cat releases/INSTALL.txt
@@ -61,12 +82,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: family-vpn-agent-0.5.0
-          path: |
-            releases/family-vpn-agent-linux-amd64
-            releases/install.sh
-            releases/release-signing.pub
-            releases/SHA256SUMS
-            releases/INSTALL.txt
-            releases/bootstrap.sh
-            releases/install.sh.sig
+          path: releases/
           if-no-files-found: error

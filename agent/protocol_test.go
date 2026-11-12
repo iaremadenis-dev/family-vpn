@@ -35,6 +35,15 @@ func TestEnrollPollAndHeartbeat(t *testing.T) {
 				http.Error(w, `{"error":"no"}`, http.StatusUnauthorized)
 				return
 			}
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("heartbeat json: %v", err)
+			}
+			for _, key := range []string{"timestamp", "nonce", "signature", "version", "report"} {
+				if body[key] == nil || body[key] == "" {
+					t.Errorf("heartbeat missing %s", key)
+				}
+			}
 			w.Write([]byte(`{"ok":true}`))
 		default:
 			http.NotFound(w, r)
@@ -56,6 +65,41 @@ func TestEnrollPollAndHeartbeat(t *testing.T) {
 	}
 	if _, err := client.Heartbeat(context.Background(), sampleReport(), nil, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHeartbeatPayloadIsSigned(t *testing.T) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Timestamp float64 `json:"timestamp"`
+			Nonce     string  `json:"nonce"`
+			Signature string  `json:"signature"`
+			Version   string  `json:"version"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Version != agentVersion {
+			t.Fatalf("version %q", body.Version)
+		}
+		if body.Nonce == "" || body.Signature == "" || body.Timestamp == 0 {
+			t.Fatal("signed heartbeat fields incomplete")
+		}
+		seen = true
+		w.Write([]byte(`{"ok":true,"jobs":[]}`))
+	}))
+	defer server.Close()
+	client := &Client{BaseURL: server.URL, Public: public, Private: private, Token: "tok"}
+	if _, err := client.Heartbeat(context.Background(), sampleReport(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatal("heartbeat was not observed")
 	}
 }
 

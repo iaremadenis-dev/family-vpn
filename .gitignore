@@ -79,6 +79,9 @@ agent.json
 # local install bundles; not the public channel
 /dist/
 
+# local toolchains (portable Go, etc.)
+/.tools/
+
 # database export packages
 /export-*/
 

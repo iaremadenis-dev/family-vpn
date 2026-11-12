@@ -7,11 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:pairing": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/pairing.test.ts",
+    "test:pairing": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/pairing.test.ts lib/server/compat-security.test.ts",
     "test:configs": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/wireguard.test.ts lib/server/configs.test.ts",
     "test:install-command": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/install-command.test.ts lib/server/client-ip.test.ts",
     "test:backup": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/backup-restore.test.ts",
     "test:security-scripts": "bash installer/client-isolation.test.sh && bash scripts/release-signing.test.sh",
+    "test:agent": "bash scripts/run-agent-go-tests.sh",
     "test": "npm run test:pairing && npm run test:configs && npm run test:install-command && npm run test:backup && npm run test:security-scripts",
     "test:production": "bash scripts/verify-production-ready.sh",
     "release:agent": "bash scripts/build-release.sh"
