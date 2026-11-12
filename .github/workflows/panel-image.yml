@@ -92,12 +92,16 @@ jobs:
           test "$(releases/family-vpn-agent-linux-amd64 --version)" = "0.5.0"
 
       - name: Check the image install package
+        env:
+          FAMILY_VPN_RELEASE_SIGNING_KEY: ${{ secrets.FAMILY_VPN_RELEASE_SIGNING_KEY }}
         run: bash scripts/build-image-install.test.sh
 
       - name: Build the production panel image
         run: bash scripts/build-panel-image.sh
 
       - name: Pack the minimal installer
+        env:
+          FAMILY_VPN_RELEASE_SIGNING_KEY: ${{ secrets.FAMILY_VPN_RELEASE_SIGNING_KEY }}
         run: |
           digest=$(tr -d '[:space:]' < dist/panel-image-id.txt)
           bash scripts/build-image-install.sh --digest "$digest" --image-ref "$digest"
