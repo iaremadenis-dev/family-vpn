@@ -19,7 +19,8 @@ services:
       - family-vpn
 
   caddy:
-    image: caddy:2.10-alpine
+    # Digest pinned for supply-chain integrity (FV-007). Bump deliberately after review.
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
     restart: unless-stopped
     # Root inside the container so the private key can stay mode 600 on the host.
     user: "0:0"

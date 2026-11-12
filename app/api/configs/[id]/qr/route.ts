@@ -1,3 +1,4 @@
+import { writeAudit } from "@/lib/server/audit";
 import { getConfigDownload } from "@/lib/server/configs";
 import { UserError } from "@/lib/server/errors";
 import { readSession } from "@/lib/server/session";
@@ -15,6 +16,7 @@ export async function GET(
   try {
     const { id } = await context.params;
     const file = await getConfigDownload(id);
+    writeAudit("config.download", id);
     const png = await QRCode.toBuffer(file.content, {
       type: "png",
       width: 320,

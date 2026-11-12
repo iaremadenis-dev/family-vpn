@@ -11,7 +11,7 @@ import {
   clearLoginFailures,
   recordLoginFailure,
 } from "@/lib/server/rate-limit";
-import { createSession, destroySession } from "@/lib/server/session";
+import { createSession, destroySession, readSession } from "@/lib/server/session";
 
 export type AuthFormState = { error: string } | null;
 
@@ -71,7 +71,8 @@ export async function login(
 
 export async function logout(): Promise<void> {
   await assertSameOrigin();
-  writeAudit("admin.logout");
+  const session = await readSession();
+  if (session) writeAudit("admin.logout");
   await destroySession();
   redirect("/login");
 }

@@ -67,24 +67,25 @@ install -d -m 700 "$CERT_DIR"
 write_env
 render_caddy "$PANEL_DIR/Caddyfile.bootstrap"
 
-if docker image inspect caddy:2.10-alpine >/dev/null 2>&1; then
+CADDY_IMAGE="caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
+if docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1; then
   printf '%s\n' "CLEAN_TEST_INVALID: образ Caddy уже был на чистой системе" >&2
   exit 2
 fi
 
 pull_public_compose_images
-docker image inspect caddy:2.10-alpine >/dev/null
+docker image inspect "$CADDY_IMAGE" >/dev/null
 ensure_runtime_images_ready
 
 # Resume after a simulated interruption: Caddy missing again, panel kept.
-docker rmi caddy:2.10-alpine >/dev/null
-if docker image inspect caddy:2.10-alpine >/dev/null 2>&1; then
+docker rmi "$CADDY_IMAGE" >/dev/null
+if docker image inspect "$CADDY_IMAGE" >/dev/null 2>&1; then
   die "не удалось убрать образ Caddy для проверки продолжения"
 fi
 docker image inspect "$FAMILY_VPN_PANEL_IMAGE" >/dev/null
 pull_public_compose_images
 ensure_runtime_images_ready
-docker image inspect caddy:2.10-alpine >/dev/null
+docker image inspect "$CADDY_IMAGE" >/dev/null
 
 printf '%s\n' "CLEAN_UBUNTU_DOCKER_OK"
 printf '%s\n' "CLEAN_UBUNTU_CADDY_OK"

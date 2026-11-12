@@ -30,6 +30,8 @@ export async function readSession(): Promise<AdminSession | null> {
 }
 
 export async function createSession() {
+  // Single-admin panel: a new login invalidates every prior session (FV-009).
+  getDb().prepare("DELETE FROM sessions").run();
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_MS);
   getDb()

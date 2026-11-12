@@ -12,7 +12,8 @@ export function proxy(request: NextRequest) {
   }
 
   const session = request.cookies.get("family_vpn_session")?.value;
-  if (!session) {
+  // Presence + minimum entropy only; authoritative checks remain in requireAdmin/readSession.
+  if (!session || session.length < 32) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
   return NextResponse.next();

@@ -49,11 +49,27 @@ export function verifyPassword(password: string, stored: string): boolean {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+const DENIED = new Set(
+  [
+    "password1234",
+    "password12345",
+    "qwerty123456",
+    "adminadmin12",
+    "letmein12345",
+    "welcome12345",
+    "familyvpn123",
+    "changeme1234",
+  ].map((value) => value.toLowerCase()),
+);
+
 export function validatePassword(password: string): string | null {
   if (password.length < 12) return "Пароль должен быть не короче 12 символов.";
   if (password.length > 128) return "Пароль длиннее 128 символов.";
   if (!/[a-zA-Zа-яА-Я]/.test(password) || !/\d/.test(password)) {
     return "Пароль должен содержать букву и цифру.";
+  }
+  if (DENIED.has(password.toLowerCase())) {
+    return "Выберите менее предсказуемый пароль.";
   }
   return null;
 }

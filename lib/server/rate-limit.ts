@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { headers } from "next/headers";
+import { clientAddressFromHeaders } from "@/lib/server/client-ip";
 import { getDb } from "@/lib/server/db";
 import { UserError } from "@/lib/server/errors";
 
@@ -38,10 +39,7 @@ function prune() {
 }
 
 async function subjectHash(): Promise<string> {
-  let subject = "direct";
-  if (process.env.FAMILY_VPN_TRUST_PROXY === "1") {
-    const forwarded = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim();
-    if (forwarded) subject = forwarded.slice(0, 200);
-  }
+  const headerList = await headers();
+  const subject = clientAddressFromHeaders(headerList) ?? "direct";
   return createHash("sha256").update(subject).digest("hex");
 }

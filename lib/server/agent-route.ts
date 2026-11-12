@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
+import { AGENT_BODY_LIMIT, readAgentJson } from "@/lib/server/agent-body";
+import { clientAddressFromHeaders } from "@/lib/server/client-ip";
 import { UserError } from "@/lib/server/errors";
 
+export { AGENT_BODY_LIMIT, readAgentJson as readJson };
+
 export function agentSubject(request: Request): string {
-  let subject = "agent-direct";
-  if (process.env.FAMILY_VPN_TRUST_PROXY === "1") {
-    const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-    if (forwarded) subject = forwarded.slice(0, 200);
-  }
+  const subject = clientAddressFromHeaders(request.headers) ?? "agent-direct";
   return createHash("sha256").update(`agent:${subject}`).digest("hex");
 }
 
@@ -16,12 +16,4 @@ export function agentError(cause: unknown): NextResponse {
     return NextResponse.json({ error: cause.message }, { status: cause.status });
   }
   return NextResponse.json({ error: "Не удалось выполнить запрос." }, { status: 500 });
-}
-
-export async function readJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    throw new UserError("Некорректный запрос.");
-  }
 }

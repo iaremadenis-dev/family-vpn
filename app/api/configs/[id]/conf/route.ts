@@ -1,3 +1,4 @@
+import { writeAudit } from "@/lib/server/audit";
 import { getConfigDownload } from "@/lib/server/configs";
 import { UserError } from "@/lib/server/errors";
 import { readSession } from "@/lib/server/session";
@@ -14,6 +15,7 @@ export async function GET(
   try {
     const { id } = await context.params;
     const file = await getConfigDownload(id);
+    writeAudit("config.download", id);
     return new NextResponse(file.content, {
       status: 200,
       headers: {

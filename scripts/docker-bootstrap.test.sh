@@ -126,17 +126,19 @@ if [ "$1" = "compose" ]; then
   [ -f "$MOCK_STATE/compose" ] || exit 1
   if printf '%s\n' "$*" | grep -q -- '--images'; then
     printf '%s\n' "${FAMILY_VPN_PANEL_IMAGE:-}"
-    printf '%s\n' "caddy:2.10-alpine"
+    printf '%s\n' "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
     exit 0
   fi
   exit 0
 fi
 if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
   target=${*: -1}
-  if [ "$target" = "caddy:2.10-alpine" ]; then
-    [ -f "$MOCK_STATE/caddy" ] || exit 1
-    exit 0
-  fi
+  case "$target" in
+    caddy:2.10-alpine|caddy:2.10-alpine@sha256:*)
+      [ -f "$MOCK_STATE/caddy" ] || exit 1
+      exit 0
+      ;;
+  esac
   [ -f "$MOCK_STATE/loaded" ] || exit 1
   format=""
   prev=""
@@ -164,18 +166,20 @@ if [ "$1" = "load" ]; then
   exit 0
 fi
 if [ "$1" = "pull" ]; then
-  if [ "$2" = "caddy:2.10-alpine" ]; then
-    if [ -f "$MOCK_STATE/caddy-pull-fail" ]; then
-      fails=$(cat "$MOCK_STATE/caddy-pull-fail")
-      if [ "$fails" -gt 0 ]; then
-        printf '%s\n' "$((fails - 1))" >"$MOCK_STATE/caddy-pull-fail"
-        exit 1
+  case "$2" in
+    caddy:2.10-alpine|caddy:2.10-alpine@sha256:*)
+      if [ -f "$MOCK_STATE/caddy-pull-fail" ]; then
+        fails=$(cat "$MOCK_STATE/caddy-pull-fail")
+        if [ "$fails" -gt 0 ]; then
+          printf '%s\n' "$((fails - 1))" >"$MOCK_STATE/caddy-pull-fail"
+          exit 1
+        fi
+        rm -f "$MOCK_STATE/caddy-pull-fail"
       fi
-      rm -f "$MOCK_STATE/caddy-pull-fail"
-    fi
-    : >"$MOCK_STATE/caddy"
-    exit 0
-  fi
+      : >"$MOCK_STATE/caddy"
+      exit 0
+      ;;
+  esac
   printf '%s\n' "$FAMILY_VPN_PANEL_DIGEST" >"$MOCK_STATE/image-id"
   : >"$MOCK_STATE/loaded"
   exit 0
@@ -434,7 +438,7 @@ set -e
   show_failure
   exit 1
 }
-grep -q "Загружаю образ caddy:2.10-alpine" "$CASE/stdout"
+grep -q "Загружаю образ caddy:2.10-alpine@sha256:" "$CASE/stdout"
 grep -q "образ панели берётся из проверенного архива" "$CASE/stdout"
 grep -q "все образы Docker Compose готовы" "$CASE/stdout"
 if grep -q "DOCKER pull $DIGEST" "$MOCK_LOG" || grep -q "DOCKER pull sha256:" "$MOCK_LOG"; then
@@ -442,7 +446,7 @@ if grep -q "DOCKER pull $DIGEST" "$MOCK_LOG" || grep -q "DOCKER pull sha256:" "$
   show_failure
   exit 1
 fi
-grep -q "DOCKER pull caddy:2.10-alpine" "$MOCK_LOG"
+grep -q "DOCKER pull caddy:2.10-alpine@sha256:" "$MOCK_LOG"
 
 # Temporary pull failures are retried.
 new_case
@@ -481,8 +485,8 @@ set -e
   show_failure
   exit 1
 }
-[ "$(count_of "DOCKER pull caddy:2.10-alpine")" -eq 2 ]
-grep -q "повторная загрузка образа caddy:2.10-alpine" "$CASE/stdout"
+[ "$(count_of "DOCKER pull caddy:2.10-alpine@sha256:")" -eq 2 ]
+grep -q "повторная загрузка образа caddy:2.10-alpine@sha256:" "$CASE/stdout"
 test -f "$MOCK_STATE/caddy"
 
 # Missing Caddy image is refused before compose up.
@@ -517,6 +521,6 @@ set +e
 RUN_CODE=$?
 set -e
 [ "$RUN_CODE" -ne 0 ]
-grep -q "образ не доступен перед запуском: caddy:2.10-alpine" "$CASE/stderr"
+grep -q "образ не доступен перед запуском: caddy:2.10-alpine@sha256:" "$CASE/stderr"
 
 printf '%s\n' "docker bootstrap order ok"
