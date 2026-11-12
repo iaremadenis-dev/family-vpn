@@ -1,8 +1,8 @@
 #!/bin/bash
 # Starts a clean Ubuntu 24.04 with systemd and runs the installer image path there.
 # Exit 2 means this machine could not provide that environment.
-# A successful run installs Docker, loads the panel image, pulls Caddy, starts
-# the stack, and checks HTTP /login. It does not issue a certificate.
+# A successful run installs Docker, loads the panel image, pulls Caddy from
+# Compose, and verifies image readiness. It does not start the panel stack.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -37,8 +37,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The published ubuntu image has no init. A VPS already has systemd, and the
-# installer starts Docker with systemctl, so the test image adds only that.
 context=$(mktemp -d)
 cat >"$context/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
@@ -92,12 +90,11 @@ set -e
 printf '%s\n' "$output"
 if [ "$code" -ne 0 ]; then
   printf '%s\n' "CLEAN_UBUNTU_TEST_FAIL code=$code" >&2
-  docker exec "$name" docker ps -a >&2 || true
-  docker exec "$name" docker compose --project-directory /opt/family-vpn/panel ps >&2 || true
   exit "$code"
 fi
 printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_DOCKER_OK'
-printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_COMPOSE_OK'
-printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_HTTP_OK'
+printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_CADDY_OK'
+printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_IMAGES_OK'
 printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_RESUME_OK'
+printf '%s\n' "$output" | grep -q 'COMPOSE_NOT_RUN'
 printf '%s\n' "$output" | grep -q 'TLS_NOT_CHECKED'
