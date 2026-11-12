@@ -1,4 +1,6 @@
 #!/bin/bash
+# Private-repository fetch. The PuTTY install does not use this script.
+# It uses the digest-pinned image package from scripts/build-image-install.sh.
 # Fetch the private Family VPN repository onto a new Ubuntu VPS and run install-panel.sh.
 # GitHub login is interactive (device code). The credential is removed before exit.
 # This script does not publish the repository and does not accept a token in its arguments.

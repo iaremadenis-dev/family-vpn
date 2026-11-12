@@ -74,6 +74,9 @@ agent.json
 /releases/*
 !/releases/.gitkeep
 
+# local install bundles; not the public channel
+/dist/
+
 # database export packages
 /export-*/
 

@@ -17,3 +17,7 @@ agent
 installer
 scripts
 docs
+panel
+**/*.test.ts
+**/*.test.tsx
+**/*.test.sh

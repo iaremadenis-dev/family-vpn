@@ -1,0 +1,5 @@
+# Used only when FAMILY_VPN_PANEL_IMAGE is set. The image reference must
+# include an immutable digest. Source checkout is not required.
+services:
+  panel:
+    image: ${FAMILY_VPN_PANEL_IMAGE}

@@ -191,7 +191,31 @@ EOF
 }
 
 compose() {
-  docker compose --project-directory "$PANEL_DIR" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+  local -a files=(-f "$COMPOSE_FILE")
+  if [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ]; then
+    files+=(-f "$PANEL_DIR/docker-compose.image.yml")
+  fi
+  docker compose --project-directory "$PANEL_DIR" --env-file "$ENV_FILE" "${files[@]}" "$@"
+}
+
+verify_panel_image() {
+  [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ] || return 0
+  [ -n "${FAMILY_VPN_PANEL_DIGEST:-}" ] || die "FAMILY_VPN_PANEL_DIGEST не задан"
+  docker image inspect "$FAMILY_VPN_PANEL_IMAGE" >/dev/null 2>&1 \
+    || die "образ панели не найден: $FAMILY_VPN_PANEL_IMAGE"
+  local expected id digests
+  expected=$FAMILY_VPN_PANEL_DIGEST
+  case "$expected" in
+    sha256:*) ;;
+    *) expected="sha256:$expected" ;;
+  esac
+  id=$(docker image inspect --format '{{.Id}}' "$FAMILY_VPN_PANEL_IMAGE")
+  digests=$(docker image inspect --format '{{range .RepoDigests}}{{.}}{{"\n"}}{{end}}' "$FAMILY_VPN_PANEL_IMAGE")
+  if [ "$id" = "$expected" ] || printf '%s\n' "$digests" | grep -F -q "$expected"; then
+    log "образ панели подтверждён: $expected"
+    return 0
+  fi
+  die "DIGEST_MISMATCH: образ $id не совпал с $expected. Установка остановлена."
 }
 
 install_packages() {
@@ -433,9 +457,14 @@ raise SystemExit(0 if row else 1)
 start_https() {
   install_packages
   install_certbot
+  verify_panel_image
   write_env
   render_caddy "$PANEL_DIR/Caddyfile.bootstrap"
-  compose up -d --build
+  if [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ]; then
+    compose up -d --no-build --pull never
+  else
+    compose up -d --build
+  fi
   local attempt
   for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     if port_owners 80 | grep -q .; then
@@ -627,7 +656,8 @@ cmd_check() {
     "$PANEL_DIR/backup.env.example" \
     "$PANEL_DIR/systemd/family-vpn-backup.service" \
     "$PANEL_DIR/systemd/family-vpn-backup.timer" \
-    "$PANEL_DIR/systemd/family-vpn-wg-backup.service"
+    "$PANEL_DIR/systemd/family-vpn-wg-backup.service" \
+    "$PANEL_DIR/docker-compose.image.yml"
   do
     [ -f "$required" ] || die "missing $required"
   done
@@ -655,6 +685,9 @@ cmd_check() {
   grep -q 'KEY_STAYS_LOCAL' "$PANEL_DIR/restore-panel.sh"
   grep -q 'KEY_STAYS_LOCAL' "$PANEL_DIR/push-restore.sh"
   grep -q -- '--decrypted' "$PANEL_DIR/install-panel.sh"
+  grep -q 'DIGEST_MISMATCH' "$PANEL_DIR/install-panel.sh"
+  grep -q -- '--no-build' "$PANEL_DIR/install-panel.sh"
+  grep -q 'FAMILY_VPN_PANEL_IMAGE' "$PANEL_DIR/docker-compose.image.yml"
   is_public_ipv4 203.0.113.5 || die "public IP check failed"
   if is_public_ipv4 10.1.2.3 || is_public_ipv4 127.0.0.1 || is_public_ipv4 192.168.1.1; then
     die "private IP was accepted"
@@ -670,7 +703,11 @@ cmd_new() {
     PANEL_IP=$(detect_public_ipv4) || die "не удалось определить публичный IPv4; укажите --ip"
   fi
   is_public_ipv4 "$PANEL_IP" || die "PRIVATE_IP: $PANEL_IP не является публичным IPv4"
-  [ -f "$APP_DIR/Dockerfile" ] || die "запустите скрипт из копии репозитория: в $APP_DIR нет Dockerfile"
+  if [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ]; then
+    [ -n "${FAMILY_VPN_PANEL_DIGEST:-}" ] || die "FAMILY_VPN_PANEL_DIGEST не задан"
+  elif [ ! -f "$APP_DIR/Dockerfile" ]; then
+    die "запустите скрипт из копии репозитория: в $APP_DIR нет Dockerfile"
+  fi
   [ -f "$COMPOSE_FILE" ] || die "не найден $COMPOSE_FILE"
   refuse_existing_data
 
@@ -711,6 +748,11 @@ while [ $# -gt 0 ]; do
     --check)
       [ -z "$MODE" ] || die "укажите только один режим"
       MODE=check
+      shift
+      ;;
+    --verify-image)
+      [ -z "$MODE" ] || die "укажите только один режим"
+      MODE=verify-image
       shift
       ;;
     --ip)
@@ -773,5 +815,6 @@ case "$MODE" in
   restore) cmd_restore "${RESTORE_ARCHIVE:-}" ;;
   setup-token) cmd_setup_token ;;
   check) cmd_check ;;
+  verify-image) verify_panel_image; log "IMAGE_OK" ;;
   *) usage; die "укажите --new, --restore, --setup-token или --check" ;;
 esac
