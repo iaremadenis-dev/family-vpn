@@ -39,9 +39,6 @@ jobs:
           digest=$(cat dist/panel-image-id.txt)
           bash scripts/build-image-install.sh --digest "$digest" --image-ref "$digest"
 
-      - name: Install Docker inside a clean Ubuntu 24.04 and load the image
-        run: bash scripts/run-clean-ubuntu-docker-test.sh
-
       - name: Upload the private image and installer
         uses: actions/upload-artifact@v4
         with:
@@ -55,3 +52,6 @@ jobs:
             dist/family-vpn-install-*.tar.gz.sha256
             dist/IMAGE-INSTALL.txt
           if-no-files-found: error
+
+      - name: Install Docker inside a clean Ubuntu 24.04 and load the image
+        run: bash scripts/run-clean-ubuntu-docker-test.sh

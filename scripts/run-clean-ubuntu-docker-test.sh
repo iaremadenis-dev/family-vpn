@@ -23,23 +23,44 @@ fi
 DIGEST=$(tr -d '[:space:]' <"$DIGEST_FILE")
 
 name="fvpn-clean-u24-$$"
+base="fvpn-ubuntu2404-systemd"
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-docker pull ubuntu:24.04
-docker run -d --name "$name" --privileged --cgroupns=host \
+# The published ubuntu image has no init. A VPS already has systemd, and the
+# installer starts Docker with systemctl, so the test image adds only that.
+context=$(mktemp -d)
+cat >"$context/Dockerfile" <<'EOF'
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends systemd systemd-sysv ca-certificates \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
+EOF
+docker build --pull -t "$base" "$context"
+rm -rf "$context"
+docker run --rm --entrypoint test "$base" -x /sbin/init
+
+if ! docker run -d --name "$name" --privileged --cgroupns=host \
   --tmpfs /run:rw,nosuid,nodev,mode=755 \
   --tmpfs /run/lock:rw,nosuid,nodev,noexec,mode=755 \
   -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
   -v "$ROOT/panel/install-panel.sh:/installer/install-panel.sh:ro" \
   -v "$ROOT/scripts/clean-ubuntu-docker.test.sh:/installer/clean-ubuntu-docker.test.sh:ro" \
-  -v "$IMAGE_TAR:/tmp/family-vpn-panel-image.tar:ro" \
+  -v "$IMAGE_TAR:/opt/family-vpn-panel-image.tar:ro" \
   -e FAMILY_VPN_PANEL_DIGEST="$DIGEST" \
-  -e FAMILY_VPN_PANEL_IMAGE_TAR=/tmp/family-vpn-panel-image.tar \
+  -e FAMILY_VPN_PANEL_IMAGE_TAR=/opt/family-vpn-panel-image.tar \
   -e DEBIAN_FRONTEND=noninteractive \
-  ubuntu:24.04 /sbin/init
+  "$base"; then
+  printf '%s\n' "CLEAN_UBUNTU_UNAVAILABLE: контейнер Ubuntu 24.04 со systemd не запустился." >&2
+  docker logs "$name" >&2 || true
+  exit 2
+fi
 
 ready=0
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
