@@ -21,6 +21,9 @@ bash -n installer/update-mode.test.sh
 bash -n scripts/build-release.sh
 bash -n scripts/build-panel-image.sh
 bash -n scripts/build-image-install.sh
+bash -n scripts/docker-bootstrap.test.sh
+bash -n scripts/clean-ubuntu-docker.test.sh
+bash -n scripts/run-clean-ubuntu-docker-test.sh
 bash -n scripts/import-panel-data.sh
 bash -n scripts/vps-preflight.sh
 bash -n panel/install-panel.sh
@@ -36,6 +39,7 @@ bash installer/onboarding.test.sh
 bash installer/install-from-panel.test.sh
 bash panel/bootstrap-panel.test.sh
 bash scripts/build-image-install.test.sh
+bash scripts/docker-bootstrap.test.sh
 
 if [ -f releases/SHA256SUMS ]; then
   (cd releases && sha256sum -c SHA256SUMS)

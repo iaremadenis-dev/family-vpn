@@ -15,11 +15,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check the installer order without Docker
+        run: |
+          bash -n panel/install-panel.sh
+          bash -n scripts/build-image-install.sh
+          bash panel/install-panel.test.sh
+          bash scripts/docker-bootstrap.test.sh
+
       - name: Build the agent files used by the installer package
         env:
           FAMILY_VPN_PUBLIC_URL: https://panel.example.com
           VERSION: "0.4.0"
         run: bash scripts/build-release.sh
+
+      - name: Check the image install package
+        run: bash scripts/build-image-install.test.sh
 
       - name: Build the production image
         run: bash scripts/build-panel-image.sh
@@ -28,6 +38,9 @@ jobs:
         run: |
           digest=$(cat dist/panel-image-id.txt)
           bash scripts/build-image-install.sh --digest "$digest" --image-ref "$digest"
+
+      - name: Install Docker inside a clean Ubuntu 24.04 and load the image
+        run: bash scripts/run-clean-ubuntu-docker-test.sh
 
       - name: Upload the private image and installer
         uses: actions/upload-artifact@v4

@@ -23,8 +23,25 @@ pack="$work/unpack/family-vpn-install"
 (cd "$pack" && sha256sum -c MANIFEST)
 bash -n "$pack/install-family-vpn.sh"
 grep -q "$DIGEST" "$pack/install-family-vpn.sh"
-grep -q 'docker pull' "$pack/install-family-vpn.sh"
+if grep -n 'docker ' "$pack/install-family-vpn.sh"; then
+  echo "bootstrap calls docker before Docker is installed" >&2
+  exit 1
+fi
+grep -q 'load_verified_image' "$pack/panel/install-panel.sh"
+grep -q 'docker.io' "$pack/panel/install-panel.sh"
+grep -q 'docker-compose-v2' "$pack/panel/install-panel.sh"
+grep -q 'docker pull' "$pack/panel/install-panel.sh"
 grep -q -- '--no-build' "$pack/panel/install-panel.sh"
+
+cleanbin=$(mktemp -d)
+for tool in bash grep awk sed cat sha256sum dirname id uname date chmod; do
+  src=$(command -v "$tool" || true)
+  if [ -n "$src" ]; then
+    printf '#!/bin/bash\nexec %q "$@"\n' "$src" >"$cleanbin/$tool"
+    chmod 755 "$cleanbin/$tool"
+  fi
+done
+PATH="$cleanbin" bash "$pack/install-family-vpn.sh" --check | grep -q 'CHECK_OK'
 grep -q 'DIGEST_MISMATCH' "$pack/panel/install-panel.sh"
 grep -q '/var/lib/family-vpn/panel:/data' "$pack/panel/docker-compose.yml"
 grep -q 'caddy:2.10-alpine' "$pack/panel/docker-compose.yml"

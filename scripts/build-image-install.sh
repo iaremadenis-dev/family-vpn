@@ -128,24 +128,11 @@ case "\$IMAGE_REF" in
     exit 1
     ;;
 esac
-if ! docker image inspect "\$IMAGE_REF" >/dev/null 2>&1; then
-  if [ -f /tmp/family-vpn-panel-image.tar ]; then
-    docker load -i /tmp/family-vpn-panel-image.tar || {
-      printf '%s\n' "family-vpn-install: не удалось загрузить проверенный архив образа" >&2
-      exit 1
-    }
-  elif printf '%s' "\$IMAGE_REF" | grep -q '/'; then
-    docker pull "\$IMAGE_REF" || {
-      printf '%s\n' "family-vpn-install: не удалось скачать образ \$IMAGE_REF" >&2
-      exit 1
-    }
-  else
-    printf '%s\n' "family-vpn-install: образ \$IMAGE_REF отсутствует. Нужен проверенный архив образа." >&2
-    exit 1
-  fi
-fi
 export FAMILY_VPN_PANEL_IMAGE="\$IMAGE_REF"
 export FAMILY_VPN_PANEL_DIGEST="\$IMAGE_DIGEST"
+if [ -z "\${FAMILY_VPN_PANEL_IMAGE_TAR:-}" ]; then
+  export FAMILY_VPN_PANEL_IMAGE_TAR=/tmp/family-vpn-panel-image.tar
+fi
 exec bash ./panel/install-panel.sh "\$@"
 EOF
 chmod 755 "$pack/install-family-vpn.sh"

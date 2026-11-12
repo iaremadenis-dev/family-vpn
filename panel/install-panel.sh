@@ -218,16 +218,69 @@ verify_panel_image() {
   die "DIGEST_MISMATCH: образ $id не совпал с $expected. Установка остановлена."
 }
 
-install_packages() {
-  apt-get update
-  apt-get install -y age ca-certificates curl iproute2 openssl python3 python3-cryptography python3-venv
+ensure_docker() {
+  export DEBIAN_FRONTEND=noninteractive
   if ! command -v docker >/dev/null 2>&1; then
-    apt-get install -y docker.io
+    log "Docker Engine не установлен. Устанавливаю."
+    apt-get update || die "не удалось обновить список пакетов"
+    apt-get install -y docker.io || die "не удалось установить Docker Engine. Повторите команду установки."
+    hash -r
+  else
+    log "Docker Engine уже установлен"
   fi
+  hash -r
+  command -v docker >/dev/null 2>&1 || die "Docker Engine не появился в PATH после установки"
   if ! docker compose version >/dev/null 2>&1; then
-    apt-get install -y docker-compose-v2
+    log "Docker Compose не установлен. Устанавливаю."
+    apt-get install -y docker-compose-v2 || die "не удалось установить Docker Compose. Повторите команду установки."
+    hash -r
+  else
+    log "Docker Compose уже установлен"
   fi
-  systemctl enable --now docker
+  docker compose version >/dev/null 2>&1 || die "Docker Compose не отвечает после установки"
+  log "Включаю и запускаю службу Docker"
+  systemctl enable --now docker || die "не удалось запустить службу Docker. Повторите команду установки."
+  local attempt=1 attempts sleep_s
+  attempts=${FAMILY_VPN_DOCKER_READY_ATTEMPTS:-30}
+  sleep_s=${FAMILY_VPN_DOCKER_READY_SLEEP:-1}
+  while [ "$attempt" -le "$attempts" ]; do
+    if docker info >/dev/null 2>&1; then
+      log "Docker daemon готов"
+      return 0
+    fi
+    sleep "$sleep_s"
+    attempt=$((attempt + 1))
+  done
+  die "Docker установлен, но daemon не ответил. Повторите команду установки."
+}
+
+load_verified_image() {
+  [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ] || return 0
+  ensure_docker
+  local tar=${FAMILY_VPN_PANEL_IMAGE_TAR:-/tmp/family-vpn-panel-image.tar}
+  if docker image inspect "$FAMILY_VPN_PANEL_IMAGE" >/dev/null 2>&1; then
+    verify_panel_image
+    return 0
+  fi
+  if [ -f "$tar" ]; then
+    log "Загружаю проверенный образ панели"
+    docker load -i "$tar" || die "не удалось загрузить проверенный архив образа. Повторите команду установки."
+  elif printf '%s' "$FAMILY_VPN_PANEL_IMAGE" | grep -q '/'; then
+    log "Скачиваю образ панели $FAMILY_VPN_PANEL_IMAGE"
+    docker pull "$FAMILY_VPN_PANEL_IMAGE" || die "не удалось скачать образ $FAMILY_VPN_PANEL_IMAGE. Повторите команду установки."
+  else
+    die "не найден проверенный архив образа: $tar"
+  fi
+  verify_panel_image
+}
+
+install_packages() {
+  export DEBIAN_FRONTEND=noninteractive
+  log "Устанавливаю системные пакеты"
+  apt-get update || die "не удалось обновить список пакетов"
+  apt-get install -y age ca-certificates curl iproute2 openssl python3 python3-cryptography python3-venv \
+    || die "не удалось установить системные пакеты. Повторите команду установки."
+  ensure_docker
 }
 
 install_certbot() {
@@ -456,8 +509,8 @@ raise SystemExit(0 if row else 1)
 
 start_https() {
   install_packages
+  load_verified_image
   install_certbot
-  verify_panel_image
   write_env
   render_caddy "$PANEL_DIR/Caddyfile.bootstrap"
   if [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ]; then
@@ -502,6 +555,11 @@ prepare_host() {
   # shellcheck disable=SC1091
   . /etc/os-release
   [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] || die "нужна Ubuntu 24.04, обнаружено ${PRETTY_NAME:-unknown}"
+  case "$(uname -m)" in
+    x86_64|amd64) ;;
+    *) die "нужна архитектура x86_64, обнаружено $(uname -m)" ;;
+  esac
+  log "Система: Ubuntu ${VERSION_ID}, $(uname -m)"
   if wireguard_present; then
     log "WireGuard обнаружен. wg0, его конфигурация, peers и firewall не изменяются."
     log "Порты 80 и 443 должны уже быть доступны снаружи. Установщик правила firewall не пишет."
@@ -509,8 +567,9 @@ prepare_host() {
     log "Firewall не переписывается. Откройте TCP 80 и 443, если они ещё закрыты."
   fi
   if ! command -v ss >/dev/null 2>&1; then
-    apt-get update
-    apt-get install -y iproute2
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update || die "не удалось обновить список пакетов"
+    apt-get install -y iproute2 || die "не удалось установить iproute2. Повторите команду установки."
   fi
   require_ports_available
   install -d -m 755 /var/lib/family-vpn "$ETC_DIR" "$BIN_DIR"
@@ -687,6 +746,10 @@ cmd_check() {
   grep -q -- '--decrypted' "$PANEL_DIR/install-panel.sh"
   grep -q 'DIGEST_MISMATCH' "$PANEL_DIR/install-panel.sh"
   grep -q -- '--no-build' "$PANEL_DIR/install-panel.sh"
+  grep -q 'load_verified_image' "$PANEL_DIR/install-panel.sh"
+  grep -q 'docker.io' "$PANEL_DIR/install-panel.sh"
+  grep -q 'docker-compose-v2' "$PANEL_DIR/install-panel.sh"
+  grep -q 'Docker daemon готов' "$PANEL_DIR/install-panel.sh"
   grep -q 'FAMILY_VPN_PANEL_IMAGE' "$PANEL_DIR/docker-compose.image.yml"
   is_public_ipv4 203.0.113.5 || die "public IP check failed"
   if is_public_ipv4 10.1.2.3 || is_public_ipv4 127.0.0.1 || is_public_ipv4 192.168.1.1; then
@@ -723,12 +786,18 @@ cmd_new() {
 
   prepare_host
   refuse_existing_data
+  install_packages
+  load_verified_image
   save_pubkey
   issue_setup_token
   start_https
   log "Продление сертификата включено: family-vpn-cert-renew.timer"
   show_installed "$ACTIVATION_CODE"
 }
+
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
 
 while [ $# -gt 0 ]; do
   case "$1" in
