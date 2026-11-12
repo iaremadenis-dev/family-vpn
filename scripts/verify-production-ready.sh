@@ -14,6 +14,8 @@ test -f installer/install.sh
 test -f scripts/build-release.sh
 
 bash -n installer/install.sh
+bash -n installer/install-from-panel.sh
+bash -n panel/bootstrap-panel.sh
 bash -n installer/preserve-wg.test.sh
 bash -n installer/update-mode.test.sh
 bash -n scripts/build-release.sh
@@ -29,6 +31,8 @@ node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib
 bash installer/preserve-wg.test.sh
 bash installer/update-mode.test.sh
 bash installer/onboarding.test.sh
+bash installer/install-from-panel.test.sh
+bash panel/bootstrap-panel.test.sh
 
 if [ -f releases/SHA256SUMS ]; then
   (cd releases && sha256sum -c SHA256SUMS)

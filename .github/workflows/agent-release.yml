@@ -34,8 +34,10 @@ jobs:
       - name: Installer shell checks
         run: |
           bash -n installer/install.sh
+          bash -n installer/install-from-panel.sh
           bash installer/preserve-wg.test.sh
           bash installer/update-mode.test.sh
+          bash installer/install-from-panel.test.sh
 
       - name: Build release artifacts
         env:

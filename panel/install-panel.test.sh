@@ -9,6 +9,8 @@ PUB=age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
 bash -n "$INSTALL"
 grep -q 'install -o 1001 -g 1001 -m 600' "$INSTALL"
 bash -n "$ROOT/panel/install-from-pc.sh"
+bash -n "$ROOT/panel/bootstrap-panel.sh"
+bash -n "$ROOT/installer/install-from-panel.sh"
 bash -n "$ROOT/panel/renew-cert.sh"
 bash -n "$ROOT/panel/push-restore.sh"
 bash -n "$ROOT/panel/restore-panel.sh"
