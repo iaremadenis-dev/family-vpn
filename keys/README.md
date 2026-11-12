@@ -1,30 +1,50 @@
-# Release signing keys
+# Release signing keys (production)
 
 `release-signing.pub` is the trusted public key for Family VPN install artifacts.
-Its SHA-256 fingerprint is pinned in generated `bootstrap.sh` / install one-liners
-independently of the downloaded tarball contents.
+Its SHA-256 fingerprint is pinned in generated `bootstrap.sh` independently of
+the downloaded installer body.
 
-## Production
+**Private key rules**
 
-1. Generate a key pair offline (do not commit the private key):
+- Never commit `release-signing.pem` / `*.pem` under `keys/`.
+- Never put the private key in Docker images, public release archives, or chat.
+- Store the PEM only in the operator secret store and GitHub Actions secret
+  `FAMILY_VPN_RELEASE_SIGNING_KEY` (full PEM text).
+
+## Fingerprint of the current committed public key
 
 ```bash
-openssl genpkey -algorithm Ed25519 -out release-signing.pem
-openssl pkey -in release-signing.pem -pubout -out release-signing.pub
+sha256sum keys/release-signing.pub
+# 1ec270a068a05c1e1af1a29953e92a29c6c518e0b43b90f1a1f417e47d59e259
 ```
 
-2. Replace `keys/release-signing.pub` in the private source repo.
-3. Store `release-signing.pem` only in the operator secret store / CI secret
-   `FAMILY_VPN_RELEASE_SIGNING_KEY` (PEM contents). Never put it in Docker images
-   or public release archives.
-4. Rebuild releases with `scripts/build-release.sh` so `install.sh.sig` is produced.
+Record this fingerprint offline before trusting the first production install.
 
-## Verify on a VPS
+## Local signing
+
+```bash
+# keys/release-signing.pem must exist locally (gitignored)
+export FAMILY_VPN_PUBLIC_URL=https://YOUR_PANEL_IP
+bash scripts/build-release.sh
+bash scripts/verify-signed-release-local.sh
+```
+
+`scripts/build-release.sh` **refuses** to produce a release without a signing key
+and always embeds mandatory signature verification in `bootstrap.sh`.
+
+## CI
+
+`agent-release` fails unless `FAMILY_VPN_RELEASE_SIGNING_KEY` is set, then builds
+and verifies `install.sh.sig` before uploading artifacts.
+
+## Verify on a VPS (before running install.sh)
 
 ```bash
 echo '<fingerprint>  release-signing.pub' | sha256sum -c -
-openssl pkeyutl -verify -pubin -inkey release-signing.pub -rawin -in install.sh -sigfile install.sh.sig
+# signature bytes are base64url in install.sh.sig — prefer panel bootstrap.sh
+# which verifies fingerprint + Ed25519 before exec.
 ```
 
-The development public key shipped in this directory is for local/CI signing only.
-Replace it before trusting production installs.
+Prefer the panel one-liner / `bootstrap.sh`: it downloads `install.sh`,
+`install.sh.sig`, and `release-signing.pub`, checks the pinned fingerprint, verifies
+the signature, and only then executes the installer.

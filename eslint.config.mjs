@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local toolchains / build outputs (not app source):
+    ".tools/**",
+    "releases/**",
+    "dist/**",
+    "agent/**",
   ]),
 ]);
 

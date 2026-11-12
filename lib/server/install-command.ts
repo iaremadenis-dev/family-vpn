@@ -19,6 +19,8 @@ export async function getInstallCommandInfo(): Promise<InstallCommandInfo> {
   const sums = await readReleaseSums();
   if (!sums.installSha256) missing.push("releases/install.sh checksum");
   if (!sums.agentSha256) missing.push("releases/agent checksum");
+  if (!sums.bootstrapSha256) missing.push("releases/bootstrap.sh checksum");
+  if (!sums.hasInstallSig) missing.push("releases/install.sh.sig");
 
   const ready = missing.length === 0 && Boolean(backendUrl);
   const installCommand = ready
@@ -46,17 +48,11 @@ function buildCommand(
   update: boolean,
 ): string {
   const suffix = update ? " --update" : "";
-  if (sums.bootstrapSha256) {
-    return [
-      `curl -fsSL ${backend}/releases/bootstrap.sh -o /tmp/fvpn-boot.sh`,
-      `echo '${sums.bootstrapSha256}  /tmp/fvpn-boot.sh' | sha256sum -c -`,
-      `sudo bash /tmp/fvpn-boot.sh${suffix}`,
-    ].join(" && ");
-  }
+  // Production installs always go through signed bootstrap (sig checked before exec).
   return [
-    `curl -fsSL ${backend}/releases/install.sh -o /tmp/fvpn-install.sh`,
-    `echo '${sums.installSha256}  /tmp/fvpn-install.sh' | sha256sum -c -`,
-    `sudo bash /tmp/fvpn-install.sh --backend ${backend}${suffix}`,
+    `curl -fsSL ${backend}/releases/bootstrap.sh -o /tmp/fvpn-boot.sh`,
+    `echo '${sums.bootstrapSha256}  /tmp/fvpn-boot.sh' | sha256sum -c -`,
+    `sudo bash /tmp/fvpn-boot.sh${suffix}`,
   ].join(" && ");
 }
 
@@ -95,6 +91,7 @@ type ReleaseSums = {
   installSha256: string | null;
   agentSha256: string | null;
   bootstrapSha256: string | null;
+  hasInstallSig: boolean;
 };
 
 async function readReleaseSums(): Promise<ReleaseSums> {
@@ -104,6 +101,7 @@ async function readReleaseSums(): Promise<ReleaseSums> {
     let installSha256: string | null = null;
     let agentSha256: string | null = null;
     let bootstrapSha256: string | null = null;
+    let hasInstallSig = false;
     for (const line of text.split(/\r?\n/)) {
       const match = line.match(/^\s*([0-9a-fA-F]{64})\s+\*?(\S+)\s*$/);
       if (!match) continue;
@@ -111,9 +109,21 @@ async function readReleaseSums(): Promise<ReleaseSums> {
       if (name === "install.sh") installSha256 = hash!.toLowerCase();
       if (name === "family-vpn-agent-linux-amd64") agentSha256 = hash!.toLowerCase();
       if (name === "bootstrap.sh") bootstrapSha256 = hash!.toLowerCase();
+      if (name === "install.sh.sig") hasInstallSig = true;
     }
-    return { installSha256, agentSha256, bootstrapSha256 };
+    try {
+      await readFile(path.resolve(process.cwd(), "releases", "install.sh.sig"));
+      hasInstallSig = true;
+    } catch {
+      // keep checksum-derived flag
+    }
+    return { installSha256, agentSha256, bootstrapSha256, hasInstallSig };
   } catch {
-    return { installSha256: null, agentSha256: null, bootstrapSha256: null };
+    return {
+      installSha256: null,
+      agentSha256: null,
+      bootstrapSha256: null,
+      hasInstallSig: false,
+    };
   }
 }

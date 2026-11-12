@@ -45,6 +45,16 @@ jobs:
           bash installer/install-from-panel.test.sh
           bash installer/client-isolation.test.sh
 
+      - name: Require production signing secret
+        env:
+          FAMILY_VPN_RELEASE_SIGNING_KEY: ${{ secrets.FAMILY_VPN_RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FAMILY_VPN_RELEASE_SIGNING_KEY:-}" ]; then
+            echo "FAMILY_VPN_RELEASE_SIGNING_KEY secret is required for production releases" >&2
+            exit 1
+          fi
+
       - name: Build Linux amd64 agent and signed release artifacts
         env:
           FAMILY_VPN_PUBLIC_URL: http://127.0.0.1:13010
@@ -61,19 +71,17 @@ jobs:
           test "$(releases/family-vpn-agent-linux-amd64 version)" = "0.5.0"
           file releases/family-vpn-agent-linux-amd64 | grep -E 'ELF 64-bit|LSB executable|static'
           test -f releases/release-signing.pub
-          if [ -f releases/install.sh.sig ]; then
-            bash scripts/release-signing.test.sh
-            FP=$(sha256sum releases/release-signing.pub | awk '{print $1}')
-            node scripts/verify-release-file.mjs releases/install.sh releases/install.sh.sig releases/release-signing.pub "$FP"
-            cp releases/install.sh /tmp/install.tampered
-            echo tamper >> /tmp/install.tampered
-            if node scripts/verify-release-file.mjs /tmp/install.tampered releases/install.sh.sig releases/release-signing.pub "$FP"; then
-              echo "tampered install.sh was accepted" >&2
-              exit 1
-            fi
-          else
-            echo "WARNING: install.sh.sig missing; set FAMILY_VPN_RELEASE_SIGNING_KEY for signed releases" >&2
+          test -f releases/install.sh.sig
+          bash scripts/release-signing.test.sh
+          FP=$(sha256sum releases/release-signing.pub | awk '{print $1}')
+          node scripts/verify-release-file.mjs releases/install.sh releases/install.sh.sig releases/release-signing.pub "$FP"
+          cp releases/install.sh /tmp/install.tampered
+          echo tamper >> /tmp/install.tampered
+          if node scripts/verify-release-file.mjs /tmp/install.tampered releases/install.sh.sig releases/release-signing.pub "$FP"; then
+            echo "tampered install.sh was accepted" >&2
+            exit 1
           fi
+          grep -F 'install.sh.sig' releases/bootstrap.sh
           grep -F -- '--update' releases/INSTALL.txt
           cat releases/SHA256SUMS
           cat releases/INSTALL.txt
