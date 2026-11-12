@@ -220,6 +220,13 @@ grep -q 'SHIP releases' "$out/ship"
 grep -q -- '--new' "$out/ship"
 grep -q '../releases:/app/releases:ro' "$ROOT/panel/docker-compose.yml"
 grep -q 'fetch-agent-release.ps1' "$ROOT/panel/install-from-pc.sh"
+grep -q 'ControlMaster=no' "$ROOT/panel/install-from-pc.sh"
+grep -q 'ControlPath=none' "$ROOT/panel/install-from-pc.sh"
+grep -q 'ControlPersist=no' "$ROOT/panel/install-from-pc.sh"
+if grep -E 'ControlMaster=auto|ControlPersist=[1-9]|-fN|-O exit' "$ROOT/panel/install-from-pc.sh"; then
+  echo "install-from-pc still opens an SSH control socket" >&2
+  exit 1
+fi
 set +e
 bash "$ROOT/panel/install-from-pc.sh" --dry-run --host root@203.0.113.5 --email admin@example.com \
   --backup-pubkey 'AGE-SECRET-KEY-1testonly' >"$out/ship-key" 2>"$out/ship-key.err"

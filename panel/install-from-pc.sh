@@ -106,27 +106,19 @@ if [ -n "$(git -C "$ROOT" status --porcelain -- panel Dockerfile)" ]; then
 fi
 
 archive=$(mktemp)
-ctl=${TMPDIR:-/tmp}/fvpn-ssh-$$
-master=0
 cleanup() {
   rm -f "$archive"
-  if [ "$master" -eq 1 ]; then
-    ssh "${ssh_opts[@]}" -O exit "$HOST" >/dev/null 2>&1 || true
-    rm -f "$ctl"
-  fi
 }
 trap cleanup EXIT
 
 git -C "$ROOT" archive --format=tar HEAD >"$archive"
-ssh_opts=(-o StrictHostKeyChecking=accept-new)
-set +e
-ssh "${ssh_opts[@]}" -o ControlMaster=auto -o ControlPersist=300 -o "ControlPath=${ctl}" -fN "$HOST"
-opened=$?
-set -e
-if [ "$opened" -eq 0 ]; then
-  master=1
-  ssh_opts+=(-o "ControlPath=${ctl}" -o ControlMaster=auto)
-fi
+# Separate SSH connections. ControlMaster resets the session on Windows Git Bash.
+ssh_opts=(
+  -o StrictHostKeyChecking=accept-new
+  -o ControlMaster=no
+  -o ControlPath=none
+  -o ControlPersist=no
+)
 
 ssh "${ssh_opts[@]}" "$HOST" "mkdir -p /opt/family-vpn/app"
 ssh "${ssh_opts[@]}" "$HOST" "tar -x -C /opt/family-vpn/app" <"$archive"
