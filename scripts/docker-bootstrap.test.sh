@@ -57,7 +57,7 @@ require_order load_verified_image \
   "ensure_docker" \
   "docker image inspect" \
   "docker load" \
-  "docker pull"
+  "docker_pull_with_retry"
 last=$(body_of load_verified_image | awk 'NF { line = $0 } END { print line }')
 printf '%s\n' "$last" | grep -q 'verify_panel_image'
 require_order start_https \
@@ -65,6 +65,8 @@ require_order start_https \
   "load_verified_image" \
   "install_certbot" \
   "Caddyfile.bootstrap" \
+  "pull_public_compose_images" \
+  "ensure_runtime_images_ready" \
   "compose up -d --no-build --pull never" \
   "issue_certificate" \
   "Caddyfile.https" \
@@ -72,6 +74,18 @@ require_order start_https \
   "install_backup" \
   'https://${PANEL_IP}/login' \
   "confirm_stack"
+require_order pull_public_compose_images \
+  "ensure_docker" \
+  "compose_image_list" \
+  "caddy:" \
+  "is_panel_runtime_image" \
+  "docker image inspect" \
+  "docker_pull_with_retry"
+require_order ensure_runtime_images_ready \
+  "docker image inspect" \
+  "compose_image_list" \
+  "verify_panel_image" \
+  "все образы Docker Compose готовы"
 require_order cmd_new \
   "refuse_existing_data" \
   "prepare_host" \
@@ -108,7 +122,21 @@ if [ "$1" = "compose" ] && [ "$2" = "version" ]; then
   [ -f "$MOCK_STATE/compose" ] || exit 1
   exit 0
 fi
+if [ "$1" = "compose" ]; then
+  [ -f "$MOCK_STATE/compose" ] || exit 1
+  if printf '%s\n' "$*" | grep -q -- '--images'; then
+    printf '%s\n' "${FAMILY_VPN_PANEL_IMAGE:-}"
+    printf '%s\n' "caddy:2.10-alpine"
+    exit 0
+  fi
+  exit 0
+fi
 if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  target=${*: -1}
+  if [ "$target" = "caddy:2.10-alpine" ]; then
+    [ -f "$MOCK_STATE/caddy" ] || exit 1
+    exit 0
+  fi
   [ -f "$MOCK_STATE/loaded" ] || exit 1
   format=""
   prev=""
@@ -136,6 +164,18 @@ if [ "$1" = "load" ]; then
   exit 0
 fi
 if [ "$1" = "pull" ]; then
+  if [ "$2" = "caddy:2.10-alpine" ]; then
+    if [ -f "$MOCK_STATE/caddy-pull-fail" ]; then
+      fails=$(cat "$MOCK_STATE/caddy-pull-fail")
+      if [ "$fails" -gt 0 ]; then
+        printf '%s\n' "$((fails - 1))" >"$MOCK_STATE/caddy-pull-fail"
+        exit 1
+      fi
+      rm -f "$MOCK_STATE/caddy-pull-fail"
+    fi
+    : >"$MOCK_STATE/caddy"
+    exit 0
+  fi
   printf '%s\n' "$FAMILY_VPN_PANEL_DIGEST" >"$MOCK_STATE/image-id"
   : >"$MOCK_STATE/loaded"
   exit 0
@@ -352,5 +392,131 @@ FAMILY_VPN_PANEL_IMAGE="ghcr.io/example/family-vpn-panel@${DIGEST}"
 expect_ok load_verified_image
 before "APT install -y docker.io" "DOCKER pull "
 grep -q "Скачиваю образ панели" "$CASE/stdout"
+
+# Public compose images, including Caddy, are pulled after Docker is ready.
+# The panel image is never pulled from a registry by this step.
+new_case
+mkdir -p "$CASE/etc"
+printf 'NODE_ENV=production\n' >"$CASE/etc/panel.env"
+cp "$CASE/docker-stub" "$MOCK_BIN/docker"
+chmod 755 "$MOCK_BIN/docker"
+: >"$MOCK_STATE/daemon"
+: >"$MOCK_STATE/compose"
+: >"$MOCK_STATE/loaded"
+printf '%s\n' "$DIGEST" >"$MOCK_STATE/image-id"
+FAMILY_VPN_PANEL_IMAGE=$DIGEST
+FAMILY_VPN_PULL_ATTEMPTS=3
+FAMILY_VPN_DOCKER_READY_SLEEP=0
+set +e
+(
+  set -euo pipefail
+  export PATH="$MOCK_BIN"
+  export MOCK_LOG MOCK_BIN MOCK_STATE MOCK_DOCKER_STUB
+  export FAMILY_VPN_PANEL_IMAGE=$DIGEST
+  export FAMILY_VPN_PANEL_DIGEST=$DIGEST
+  export FAMILY_VPN_PANEL_IMAGE_TAR=$TAR
+  export FAMILY_VPN_PULL_ATTEMPTS=3
+  export FAMILY_VPN_DOCKER_READY_ATTEMPTS=5
+  export FAMILY_VPN_DOCKER_READY_SLEEP=0
+  # shellcheck disable=SC1090
+  source "$INSTALL"
+  ETC_DIR="$CASE/etc"
+  ENV_FILE="$CASE/etc/panel.env"
+  PANEL_DIR="$ROOT/panel"
+  COMPOSE_FILE="$PANEL_DIR/docker-compose.yml"
+  pull_public_compose_images
+  ensure_runtime_images_ready
+) >"$CASE/stdout" 2>"$CASE/stderr"
+RUN_CODE=$?
+set -e
+[ "$RUN_CODE" -eq 0 ] || {
+  printf '%s\n' "pull_public_compose_images failed" >&2
+  show_failure
+  exit 1
+}
+grep -q "Загружаю образ caddy:2.10-alpine" "$CASE/stdout"
+grep -q "образ панели берётся из проверенного архива" "$CASE/stdout"
+grep -q "все образы Docker Compose готовы" "$CASE/stdout"
+if grep -q "DOCKER pull $DIGEST" "$MOCK_LOG" || grep -q "DOCKER pull sha256:" "$MOCK_LOG"; then
+  printf '%s\n' "panel image was pulled from a registry" >&2
+  show_failure
+  exit 1
+fi
+grep -q "DOCKER pull caddy:2.10-alpine" "$MOCK_LOG"
+
+# Temporary pull failures are retried.
+new_case
+mkdir -p "$CASE/etc"
+printf 'NODE_ENV=production\n' >"$CASE/etc/panel.env"
+cp "$CASE/docker-stub" "$MOCK_BIN/docker"
+chmod 755 "$MOCK_BIN/docker"
+: >"$MOCK_STATE/daemon"
+: >"$MOCK_STATE/compose"
+: >"$MOCK_STATE/loaded"
+printf '%s\n' "$DIGEST" >"$MOCK_STATE/image-id"
+printf '1\n' >"$MOCK_STATE/caddy-pull-fail"
+FAMILY_VPN_PANEL_IMAGE=$DIGEST
+set +e
+(
+  set -euo pipefail
+  export PATH="$MOCK_BIN"
+  export MOCK_LOG MOCK_BIN MOCK_STATE MOCK_DOCKER_STUB
+  export FAMILY_VPN_PANEL_IMAGE=$DIGEST
+  export FAMILY_VPN_PANEL_DIGEST=$DIGEST
+  export FAMILY_VPN_PULL_ATTEMPTS=3
+  export FAMILY_VPN_DOCKER_READY_ATTEMPTS=5
+  export FAMILY_VPN_DOCKER_READY_SLEEP=0
+  # shellcheck disable=SC1090
+  source "$INSTALL"
+  ETC_DIR="$CASE/etc"
+  ENV_FILE="$CASE/etc/panel.env"
+  PANEL_DIR="$ROOT/panel"
+  COMPOSE_FILE="$PANEL_DIR/docker-compose.yml"
+  pull_public_compose_images
+) >"$CASE/stdout" 2>"$CASE/stderr"
+RUN_CODE=$?
+set -e
+[ "$RUN_CODE" -eq 0 ] || {
+  printf '%s\n' "caddy pull retry failed" >&2
+  show_failure
+  exit 1
+}
+[ "$(count_of "DOCKER pull caddy:2.10-alpine")" -eq 2 ]
+grep -q "повторная загрузка образа caddy:2.10-alpine" "$CASE/stdout"
+test -f "$MOCK_STATE/caddy"
+
+# Missing Caddy image is refused before compose up.
+new_case
+mkdir -p "$CASE/etc"
+printf 'NODE_ENV=production\n' >"$CASE/etc/panel.env"
+cp "$CASE/docker-stub" "$MOCK_BIN/docker"
+chmod 755 "$MOCK_BIN/docker"
+: >"$MOCK_STATE/daemon"
+: >"$MOCK_STATE/compose"
+: >"$MOCK_STATE/loaded"
+printf '%s\n' "$DIGEST" >"$MOCK_STATE/image-id"
+FAMILY_VPN_PANEL_IMAGE=$DIGEST
+set +e
+(
+  set -euo pipefail
+  export PATH="$MOCK_BIN"
+  export MOCK_LOG MOCK_BIN MOCK_STATE MOCK_DOCKER_STUB
+  export FAMILY_VPN_PANEL_IMAGE=$DIGEST
+  export FAMILY_VPN_PANEL_DIGEST=$DIGEST
+  export FAMILY_VPN_PULL_ATTEMPTS=1
+  export FAMILY_VPN_DOCKER_READY_ATTEMPTS=5
+  export FAMILY_VPN_DOCKER_READY_SLEEP=0
+  # shellcheck disable=SC1090
+  source "$INSTALL"
+  ETC_DIR="$CASE/etc"
+  ENV_FILE="$CASE/etc/panel.env"
+  PANEL_DIR="$ROOT/panel"
+  COMPOSE_FILE="$PANEL_DIR/docker-compose.yml"
+  ensure_runtime_images_ready
+) >"$CASE/stdout" 2>"$CASE/stderr"
+RUN_CODE=$?
+set -e
+[ "$RUN_CODE" -ne 0 ]
+grep -q "образ не доступен перед запуском: caddy:2.10-alpine" "$CASE/stderr"
 
 printf '%s\n' "docker bootstrap order ok"

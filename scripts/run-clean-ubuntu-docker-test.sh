@@ -1,7 +1,8 @@
 #!/bin/bash
-# Starts a clean Ubuntu 24.04 with systemd and runs the Docker bootstrap there.
+# Starts a clean Ubuntu 24.04 with systemd and runs the installer image path there.
 # Exit 2 means this machine could not provide that environment.
-# A successful run loads the image. It does not install the panel or a certificate.
+# A successful run installs Docker, loads the panel image, pulls Caddy, starts
+# the stack, and checks HTTP /login. It does not issue a certificate.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -22,6 +23,13 @@ fi
 }
 DIGEST=$(tr -d '[:space:]' <"$DIGEST_FILE")
 
+releases=$ROOT/releases
+if [ ! -d "$releases" ]; then
+  releases=$(mktemp -d)
+  mkdir -p "$releases"
+  : >"$releases/.gitkeep"
+fi
+
 name="fvpn-clean-u24-$$"
 base="fvpn-ubuntu2404-systemd"
 cleanup() {
@@ -36,7 +44,7 @@ cat >"$context/Dockerfile" <<'EOF'
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
- && apt-get install -y --no-install-recommends systemd systemd-sysv ca-certificates \
+ && apt-get install -y --no-install-recommends systemd systemd-sysv ca-certificates curl \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 STOPSIGNAL SIGRTMIN+3
@@ -50,7 +58,8 @@ if ! docker run -d --name "$name" --privileged --cgroupns=host \
   --tmpfs /run:rw,nosuid,nodev,mode=755 \
   --tmpfs /run/lock:rw,nosuid,nodev,noexec,mode=755 \
   -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-  -v "$ROOT/panel/install-panel.sh:/installer/install-panel.sh:ro" \
+  -v "$ROOT/panel:/opt/family-vpn/panel:ro" \
+  -v "$releases:/opt/family-vpn/releases:ro" \
   -v "$ROOT/scripts/clean-ubuntu-docker.test.sh:/installer/clean-ubuntu-docker.test.sh:ro" \
   -v "$IMAGE_TAR:/opt/family-vpn-panel-image.tar:ro" \
   -e FAMILY_VPN_PANEL_DIGEST="$DIGEST" \
@@ -76,6 +85,19 @@ if [ "$ready" -ne 1 ]; then
   exit 2
 fi
 
-output=$(docker exec "$name" bash /installer/clean-ubuntu-docker.test.sh)
+set +e
+output=$(docker exec "$name" bash /installer/clean-ubuntu-docker.test.sh 2>&1)
+code=$?
+set -e
 printf '%s\n' "$output"
+if [ "$code" -ne 0 ]; then
+  printf '%s\n' "CLEAN_UBUNTU_TEST_FAIL code=$code" >&2
+  docker exec "$name" docker ps -a >&2 || true
+  docker exec "$name" docker compose --project-directory /opt/family-vpn/panel ps >&2 || true
+  exit "$code"
+fi
 printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_DOCKER_OK'
+printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_COMPOSE_OK'
+printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_HTTP_OK'
+printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_RESUME_OK'
+printf '%s\n' "$output" | grep -q 'TLS_NOT_CHECKED'

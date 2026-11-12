@@ -7,7 +7,8 @@
 set -euo pipefail
 umask 077
 
-APP_DIR=$(cd "$(dirname "$0")/.." && pwd)
+SCRIPT_PATH=${BASH_SOURCE[0]:-$0}
+APP_DIR=$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)
 PANEL_DIR="$APP_DIR/panel"
 STATE_DIR=${FAMILY_VPN_PANEL_DIR:-/var/lib/family-vpn/panel}
 CERT_DIR=/var/lib/family-vpn/certs
@@ -267,11 +268,81 @@ load_verified_image() {
     docker load -i "$tar" || die "не удалось загрузить проверенный архив образа. Повторите команду установки."
   elif printf '%s' "$FAMILY_VPN_PANEL_IMAGE" | grep -q '/'; then
     log "Скачиваю образ панели $FAMILY_VPN_PANEL_IMAGE"
-    docker pull "$FAMILY_VPN_PANEL_IMAGE" || die "не удалось скачать образ $FAMILY_VPN_PANEL_IMAGE. Повторите команду установки."
+    docker_pull_with_retry "$FAMILY_VPN_PANEL_IMAGE"
   else
     die "не найден проверенный архив образа: $tar"
   fi
   verify_panel_image
+}
+
+is_panel_runtime_image() {
+  local image=$1
+  [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ] || return 1
+  [ "$image" = "$FAMILY_VPN_PANEL_IMAGE" ] && return 0
+  [ -n "${FAMILY_VPN_PANEL_DIGEST:-}" ] && [ "$image" = "$FAMILY_VPN_PANEL_DIGEST" ] && return 0
+  return 1
+}
+
+compose_image_list() {
+  compose config --images | awk 'NF { print }' | sort -u
+}
+
+docker_pull_with_retry() {
+  local image=$1
+  local attempt=1
+  local attempts=${FAMILY_VPN_PULL_ATTEMPTS:-5}
+  local sleep_s
+  while [ "$attempt" -le "$attempts" ]; do
+    if docker pull "$image"; then
+      return 0
+    fi
+    if [ "$attempt" -eq "$attempts" ]; then
+      die "не удалось скачать образ $image. Повторите команду установки."
+    fi
+    sleep_s=$((attempt * 2))
+    log "повторная загрузка образа $image через ${sleep_s}с"
+    sleep "$sleep_s"
+    attempt=$((attempt + 1))
+  done
+}
+
+pull_public_compose_images() {
+  ensure_docker
+  [ -f "$ENV_FILE" ] || die "нет $ENV_FILE. Сначала подготовьте окружение панели."
+  local image found_public=0
+  local -a images=()
+  while IFS= read -r image; do
+    [ -n "$image" ] || continue
+    images+=("$image")
+  done < <(compose_image_list)
+  [ "${#images[@]}" -gt 0 ] || die "compose не вернул список образов"
+  printf '%s\n' "${images[@]}" | grep -q '^caddy:' \
+    || die "в Docker Compose нет образа Caddy"
+  for image in "${images[@]}"; do
+    if is_panel_runtime_image "$image"; then
+      log "образ панели берётся из проверенного архива, не из registry"
+      continue
+    fi
+    found_public=1
+    if docker image inspect "$image" >/dev/null 2>&1; then
+      log "образ уже есть: $image"
+      continue
+    fi
+    log "Загружаю образ $image"
+    docker_pull_with_retry "$image"
+  done
+  [ "$found_public" -eq 1 ] || die "в Docker Compose нет публичных образов для загрузки"
+}
+
+ensure_runtime_images_ready() {
+  local image
+  while IFS= read -r image; do
+    [ -n "$image" ] || continue
+    docker image inspect "$image" >/dev/null 2>&1 \
+      || die "образ не доступен перед запуском: $image"
+  done < <(compose_image_list)
+  verify_panel_image
+  log "все образы Docker Compose готовы"
 }
 
 install_packages() {
@@ -432,7 +503,7 @@ show_installed() {
     printf 'Панель: %s\n' "$url"
     printf 'HTTPS: OK\n'
     printf 'Docker: OK\n'
-    printf 'База данных: OK\n\n'
+    printf 'Caddy: OK\n\n'
     printf 'КОД АКТИВАЦИИ АДМИНИСТРАТОРА:\n\n'
     print_activation_code "$code"
     printf '========================================\n\n'
@@ -513,6 +584,8 @@ start_https() {
   install_certbot
   write_env
   render_caddy "$PANEL_DIR/Caddyfile.bootstrap"
+  pull_public_compose_images
+  ensure_runtime_images_ready
   if [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ]; then
     compose up -d --no-build --pull never
   else
@@ -747,9 +820,14 @@ cmd_check() {
   grep -q 'DIGEST_MISMATCH' "$PANEL_DIR/install-panel.sh"
   grep -q -- '--no-build' "$PANEL_DIR/install-panel.sh"
   grep -q 'load_verified_image' "$PANEL_DIR/install-panel.sh"
+  grep -q 'pull_public_compose_images' "$PANEL_DIR/install-panel.sh"
+  grep -q 'ensure_runtime_images_ready' "$PANEL_DIR/install-panel.sh"
+  grep -q 'compose config --images' "$PANEL_DIR/install-panel.sh"
   grep -q 'docker.io' "$PANEL_DIR/install-panel.sh"
   grep -q 'docker-compose-v2' "$PANEL_DIR/install-panel.sh"
   grep -q 'Docker daemon готов' "$PANEL_DIR/install-panel.sh"
+  grep -q 'Caddy: OK' "$PANEL_DIR/install-panel.sh"
+  grep -q 'caddy:2.10-alpine' "$PANEL_DIR/docker-compose.yml"
   grep -q 'FAMILY_VPN_PANEL_IMAGE' "$PANEL_DIR/docker-compose.image.yml"
   is_public_ipv4 203.0.113.5 || die "public IP check failed"
   if is_public_ipv4 10.1.2.3 || is_public_ipv4 127.0.0.1 || is_public_ipv4 192.168.1.1; then

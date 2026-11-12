@@ -28,6 +28,10 @@ if grep -n 'docker ' "$pack/install-family-vpn.sh"; then
   exit 1
 fi
 grep -q 'load_verified_image' "$pack/panel/install-panel.sh"
+grep -q 'pull_public_compose_images' "$pack/panel/install-panel.sh"
+grep -q 'ensure_runtime_images_ready' "$pack/panel/install-panel.sh"
+grep -q 'compose config --images' "$pack/panel/install-panel.sh"
+grep -q 'caddy:2.10-alpine' "$pack/panel/docker-compose.yml"
 grep -q 'docker.io' "$pack/panel/install-panel.sh"
 grep -q 'docker-compose-v2' "$pack/panel/install-panel.sh"
 grep -q 'docker pull' "$pack/panel/install-panel.sh"
