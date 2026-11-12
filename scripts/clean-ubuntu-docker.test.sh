@@ -54,6 +54,22 @@ PANEL_IP=$FAMILY_VPN_PANEL_IP
 install_packages
 docker compose version >/dev/null
 systemctl is-active docker >/dev/null
+
+# This test runs inside a container. Overlay-on-overlay fails on GitHub Actions,
+# so nested Docker uses vfs here. A real VPS keeps the default storage driver.
+mkdir -p /etc/docker
+printf '%s\n' '{"storage-driver":"vfs"}' >/etc/docker/daemon.json
+systemctl restart docker
+ready=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  if docker info >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+[ "$ready" -eq 1 ] || die "Docker daemon не ответил после смены storage driver для nested-теста"
+
 load_verified_image
 id=$(docker image inspect --format '{{.Id}}' "$FAMILY_VPN_PANEL_IMAGE")
 [ "$id" = "$FAMILY_VPN_PANEL_DIGEST" ]
