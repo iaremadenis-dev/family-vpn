@@ -40,6 +40,7 @@ node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib
 bash installer/preserve-wg.test.sh
 bash installer/update-mode.test.sh
 bash installer/onboarding.test.sh
+bash installer/host-hardening.test.sh
 bash installer/install-from-panel.test.sh
 bash panel/bootstrap-panel.test.sh
 bash scripts/build-image-install.test.sh

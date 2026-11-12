@@ -137,6 +137,17 @@ Production release / deployment / публикация отчёта на GitHub 
   - Agent 0.5.0 signed; panel update pack Ed25519-verified; DE-01/NL-01 **not** deployed.
 - Команды: `dist/UPDATE-COMMANDS.txt`. Copy artifacts to panel `/releases/` only after separate approval.
 
+## Installer hardening (all four scenarios)
+
+| Scenario | Status |
+|---|---|
+| 1. New panel (clean Ubuntu) | UFW 22/80/443; SSH password off only after authorized_keys; age≠offsite messaging; image-install Ed25519+FP |
+| 2. New WireGuard+agent 0.5.0 | Auto WAN/subnet; isolation+NAT PostUp; UFW 22+51820/udp; FORWARD policy ACCEPT (no PostUp conflict); safe SSH; signed bootstrap |
+| 3. Panel updater (DE-01) | Digest-pinned signed pack; preserves DB/secrets; **does not** rewrite UFW/SSH/WG; local backup ≠ offsite note |
+| 4. Agent updater (NL-01 `--update`) | Binary/unit only; **refuses** wg0/UFW/NAT/SSH mutation; signed heartbeats after 0.5.0 |
+
+Old release `panel-d587d590518d` unchanged. Live DE-01/NL-01 not touched.
+
 ## Готовность
 
 Код и подписанные agent-артефакты **готовы к контролируемому ручному** обновлению после:

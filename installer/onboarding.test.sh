@@ -25,6 +25,13 @@ if grep -nE '^SUBNET="10\.200\.0\.0/24"$' "$INSTALL"; then
   echo "fresh installs must auto-pick a subnet instead of always 10.200.0.0/24" >&2
   exit 1
 fi
+if grep -nE 'iface=ens3|IFACE="ens3"|SUBNET="10\.201\.0\.0/24"' "$INSTALL"; then
+  echo "must not hardcode ens3 or 10.201.0.0/24 as universal defaults" >&2
+  exit 1
+fi
+
+grep -q 'harden_fresh_agent_host' "$INSTALL"
+grep -q 'configure_ufw_agent' "$INSTALL"
 
 # Explicit --subnet still accepted by the parser (validation happens later).
 bash -n "$INSTALL"

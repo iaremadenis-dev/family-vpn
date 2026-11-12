@@ -503,16 +503,21 @@ show_installed() {
     printf 'Панель: %s\n' "$url"
     printf 'HTTPS: OK\n'
     printf 'Docker: OK\n'
-    printf 'Caddy: OK\n\n'
+    printf 'Caddy: OK\n'
+    printf 'UFW: 22/80/443 (см. ufw status)\n\n'
     printf 'КОД АКТИВАЦИИ АДМИНИСТРАТОРА:\n\n'
     print_activation_code "$code"
     printf '========================================\n\n'
     printf 'Открой панель, введи этот код\n'
     printf 'и создай пароль администратора.\n\n'
+    printf 'Локальные age-снимки в /var/lib/family-vpn/backups/\n'
+    printf 'не заменяют внешнюю резервную копию.\n'
+    printf 'Для offsite настройте /etc/family-vpn/backup.env (S3).\n\n'
     printf '========================================\n'
   else
     print_activation_code "$code"
   fi
+  log "BACKUP_NOTE: local age backup is on-box only; configure backup.env for offsite."
 }
 
 show_reissued() {
@@ -622,6 +627,80 @@ start_https() {
   confirm_stack
 }
 
+ssh_admin_user() {
+  if [ -n "${SUDO_USER:-}" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+    printf '%s\n' "$SUDO_USER"
+  else
+    printf 'root\n'
+  fi
+}
+
+ssh_has_authorized_key() {
+  local user=$1 home keys
+  home=$(getent passwd "$user" | cut -d: -f6)
+  [ -n "$home" ] || return 1
+  keys="$home/.ssh/authorized_keys"
+  [ -s "$keys" ] || return 1
+  grep -E '^[[:space:]]*ssh-(ed25519|rsa|ecdsa)[A-Za-z0-9_-]*[[:space:]]' "$keys" >/dev/null
+}
+
+# Password SSH is disabled only after a usable public key is present for the admin user.
+harden_ssh_if_safe() {
+  local user conf
+  user=$(ssh_admin_user)
+  conf=/etc/ssh/sshd_config.d/99-family-vpn-hardening.conf
+  if ! ssh_has_authorized_key "$user"; then
+    log "SSH: вход по паролю оставлен (нет публичного ключа у $user). Без ключа доступ не блокируется."
+    return 0
+  fi
+  install -d -m 755 /etc/ssh/sshd_config.d
+  cat >"$conf" <<'EOF'
+# Managed by Family VPN panel installer. Applied only after authorized_keys check.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+EOF
+  chmod 644 "$conf"
+  if ! sshd -t 2>/dev/null; then
+    rm -f "$conf"
+    log "SSH: hardening пропущен (sshd -t не прошёл); пароль не отключался."
+    return 0
+  fi
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+  log "SSH: PasswordAuthentication отключён после проверки ключа ($user)."
+}
+
+# Panel host UFW: 22/80/443. Does not touch WireGuard PostUp/NAT on co-located agents.
+configure_ufw_panel() {
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y >/dev/null || die "не удалось обновить список пакетов для ufw"
+  apt-get install -y ufw >/dev/null || die "не удалось установить ufw"
+  ufw default deny incoming >/dev/null 2>&1 || true
+  ufw default allow outgoing >/dev/null 2>&1 || true
+  ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || true
+  ufw allow 80/tcp comment 'family-vpn-http' >/dev/null 2>&1 || ufw allow 80/tcp >/dev/null 2>&1 || true
+  ufw allow 443/tcp comment 'family-vpn-https' >/dev/null 2>&1 || ufw allow 443/tcp >/dev/null 2>&1 || true
+  # If WireGuard is already on this host, allow UDP without rewriting its PostUp rules.
+  if wireguard_present; then
+    ufw allow 51820/udp comment 'family-vpn-wireguard' >/dev/null 2>&1 || ufw allow 51820/udp >/dev/null 2>&1 || true
+    if [ -f /etc/default/ufw ]; then
+      sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+      grep -q '^DEFAULT_FORWARD_POLICY=' /etc/default/ufw \
+        || printf 'DEFAULT_FORWARD_POLICY="ACCEPT"\n' >>/etc/default/ufw
+    fi
+  fi
+  ufw --force enable >/dev/null
+  ufw status | grep -qi 'Status: active' || die "ufw не активировался"
+  log "UFW активен: 22/tcp, 80/tcp, 443/tcp. Правила WireGuard PostUp не дублируются."
+}
+
+harden_fresh_panel_host() {
+  configure_ufw_panel
+  harden_ssh_if_safe
+  install -d -m 700 /var/lib/family-vpn
+  date -u +%Y-%m-%dT%H:%M:%SZ >/var/lib/family-vpn/host-hardening.done
+  chmod 600 /var/lib/family-vpn/host-hardening.done
+}
+
 prepare_host() {
   [ "$(id -u)" -eq 0 ] || die "запустите установщик от root"
   [ -r /etc/os-release ] || die "нужна Ubuntu 24.04"
@@ -634,10 +713,7 @@ prepare_host() {
   esac
   log "Система: Ubuntu ${VERSION_ID}, $(uname -m)"
   if wireguard_present; then
-    log "WireGuard обнаружен. wg0, его конфигурация, peers и firewall не изменяются."
-    log "Порты 80 и 443 должны уже быть доступны снаружи. Установщик правила firewall не пишет."
-  else
-    log "Firewall не переписывается. Откройте TCP 80 и 443, если они ещё закрыты."
+    log "WireGuard обнаружен. wg0, peers и PostUp/PostDown не изменяются."
   fi
   if ! command -v ss >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
@@ -649,6 +725,8 @@ prepare_host() {
   install -d -m 700 -o 1001 -g 1001 "$STATE_DIR"
   install -d -m 755 "$ACME_DIR"
   install -d -m 700 "$CERT_DIR"
+  # Fresh host hardening (UFW + safe SSH). Idempotent allows; never disables SSH without a key.
+  harden_fresh_panel_host
 }
 
 cmd_setup_token() {
@@ -857,7 +935,9 @@ cmd_new() {
     log "SQLite и master.key будут в $STATE_DIR с правами только у uid 1001."
     log "Администратор создаётся в браузере на /login по одноразовому коду. Пароль установщик не принимает."
     log "Копии шифруются публичным ключом age. Приватный ключ на сервер не кладётся."
-    log "WireGuard, wg0.conf, peers, UDP 51820 и действующий firewall не изменяются."
+    log "UFW откроет 22/80/443; SSH password отключится только при наличии authorized_keys."
+    log "WireGuard wg0/peers/PostUp не переписываются."
+    log "Локальный age-backup не заменяет внешнюю резервную копию (нужен backup.env / S3)."
     log "Повторный запуск при уже существующей базе останавливается, не стирая её."
     exit 0
   fi

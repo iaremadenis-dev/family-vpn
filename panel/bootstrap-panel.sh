@@ -10,8 +10,8 @@ umask 077
 APP_DIR=$(cd "$(dirname "$0")/.." && pwd)
 REPO=${FAMILY_VPN_REPO:-iaremadenis-dev/family-vpn}
 WORKFLOW=${FAMILY_VPN_WORKFLOW:-agent-release.yml}
-ARTIFACT=${FAMILY_VPN_ARTIFACT:-family-vpn-agent-0.4.0}
-AGENT_VERSION=${FAMILY_VPN_AGENT_VERSION:-0.4.0}
+ARTIFACT=${FAMILY_VPN_ARTIFACT:-family-vpn-agent-0.5.0}
+AGENT_VERSION=${FAMILY_VPN_AGENT_VERSION:-0.5.0}
 MODE=""
 EMAIL=""
 PUBKEY=""

@@ -5,7 +5,8 @@
 # A remote panel must use HTTPS. This script does not pipe an unverified
 # remote script into a privileged shell by itself.
 # 0.5.0: signed heartbeats; new wg0 gets client-isolation FORWARD rules.
-# --update never rewrites an existing wg0.conf.
+# Fresh installs also apply UFW (22/tcp + 51820/udp) and safe SSH hardening.
+# --update never rewrites an existing wg0.conf, UFW, NAT, or SSH policy.
 set -euo pipefail
 umask 077
 
@@ -272,10 +273,96 @@ ExecStart=$AGENT_BIN run --backend $BACKEND --data $DATA_DIR
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=$DATA_DIR /etc/wireguard
 
 [Install]
 WantedBy=multi-user.target
 EOF
+}
+
+# Detect default-route WAN iface. Never assumes ens3/eth0.
+detect_wan_iface() {
+  ip -4 route show default | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}'
+}
+
+ssh_admin_user() {
+  if [ -n "${SUDO_USER:-}" ] && id "$SUDO_USER" >/dev/null 2>&1; then
+    printf '%s\n' "$SUDO_USER"
+  else
+    printf 'root\n'
+  fi
+}
+
+ssh_has_authorized_key() {
+  local user=$1 home keys
+  home=$(getent passwd "$user" | cut -d: -f6)
+  [ -n "$home" ] || return 1
+  keys="$home/.ssh/authorized_keys"
+  [ -s "$keys" ] || return 1
+  grep -E '^[[:space:]]*ssh-(ed25519|rsa|ecdsa)[A-Za-z0-9_-]*[[:space:]]' "$keys" >/dev/null
+}
+
+# Disable password SSH only after a usable authorized_keys entry exists for the admin user.
+harden_ssh_if_safe() {
+  local user conf
+  user=$(ssh_admin_user)
+  conf=/etc/ssh/sshd_config.d/99-family-vpn-hardening.conf
+  if ! ssh_has_authorized_key "$user"; then
+    echo "family-vpn-install: SSH password auth left enabled (no public key for $user)"
+    return 0
+  fi
+  install -d -m 755 /etc/ssh/sshd_config.d
+  cat >"$conf" <<'EOF'
+# Managed by Family VPN installer. Password auth disabled only after authorized_keys check.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+EOF
+  chmod 644 "$conf"
+  if ! sshd -t 2>/dev/null; then
+    rm -f "$conf"
+    echo "family-vpn-install: SSH hardening skipped (sshd -t failed); password auth unchanged"
+    return 0
+  fi
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+  echo "family-vpn-install: SSH password authentication disabled for key-based access ($user)"
+}
+
+# UFW for a dedicated WG node. NAT/isolation stay in wg0 PostUp only (no duplicate MASQUERADE).
+configure_ufw_agent() {
+  local wan
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get install -y ufw >/dev/null
+  # Let WireGuard PostUp own filter FORWARD / NAT; UFW must not drop forwarded WG traffic.
+  if [ -f /etc/default/ufw ]; then
+    sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+    grep -q '^DEFAULT_FORWARD_POLICY=' /etc/default/ufw \
+      || printf 'DEFAULT_FORWARD_POLICY="ACCEPT"\n' >>/etc/default/ufw
+  fi
+  ufw default deny incoming >/dev/null 2>&1 || true
+  ufw default allow outgoing >/dev/null 2>&1 || true
+  ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || true
+  ufw allow 51820/udp comment 'family-vpn-wireguard' >/dev/null 2>&1 || ufw allow 51820/udp >/dev/null 2>&1 || true
+  wan=$(detect_wan_iface || true)
+  if [ -n "$wan" ]; then
+    # Route allowances are additive; they do not replace PostUp isolation DROP wg0→wg0.
+    ufw route allow in on wg0 out on "$wan" >/dev/null 2>&1 || true
+    ufw route allow in on "$wan" out on wg0 >/dev/null 2>&1 || true
+  fi
+  ufw --force enable >/dev/null
+  ufw status | grep -qi 'Status: active' || die "ufw did not become active"
+  echo "family-vpn-install: UFW active (22/tcp, 51820/udp); NAT/isolation remain in wg0 PostUp"
+}
+
+harden_fresh_agent_host() {
+  # Never called from --update.
+  configure_ufw_agent
+  harden_ssh_if_safe
+  install -d -m 700 "$DATA_DIR"
+  date -u +%Y-%m-%dT%H:%M:%SZ >"$DATA_DIR/host-hardening.done"
+  chmod 600 "$DATA_DIR/host-hardening.done"
 }
 
 agent_is_paired() {
@@ -588,11 +675,12 @@ else
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   apt-get install -y wireguard iptables
-  iface=$(ip -4 route show default | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
-  [ -n "$iface" ] || die "could not detect the external network interface"
+  iface=$(detect_wan_iface)
+  [ -n "$iface" ] || die "could not detect the external network interface from the default route"
+  echo "family-vpn-install: WAN iface from default route: $iface"
   if [ "$SUBNET_SET" -eq 0 ] || [ -z "$SUBNET" ]; then
     SUBNET=$(choose_vpn_subnet)
-    echo "family-vpn-install: selected VPN subnet $SUBNET"
+    echo "family-vpn-install: selected VPN subnet $SUBNET (auto-detected; not a fixed template)"
   fi
   base=${SUBNET%/*}
   address="${base%.*}.1/24"
@@ -636,6 +724,9 @@ write_agent_unit
 systemctl daemon-reload
 /usr/local/bin/family-vpn-agent enroll --backend "$BACKEND" --data "$DATA_DIR"
 systemctl enable --now family-vpn-agent
+# Host firewall/SSH hardening for new installs only (skipped by --update above).
+harden_fresh_agent_host
 post_install_check
 echo "family-vpn-install: agent service is enabled"
 echo "family-vpn-install: enter the pairing code in Servers → Add server"
+echo "family-vpn-install: local backups under $DATA_DIR/backups are not an offsite DR copy"

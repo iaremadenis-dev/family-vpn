@@ -108,13 +108,13 @@ EOF
   )
 }
 
-write_artifact 0.4.0 "$work/artifact"
+write_artifact 0.5.0 "$work/artifact"
 PATH="$work/bin:$PATH" FAMILY_VPN_FAKE_RUN_ID=42 FAMILY_VPN_FAKE_ARTIFACT="$work/artifact" \
   bash "$work/src/panel/bootstrap-panel.sh" --fetch-only
 test -f "$work/src/releases/family-vpn-agent-linux-amd64"
 (cd "$work/src/releases" && sha256sum -c SHA256SUMS)
 got=$("$work/src/releases/family-vpn-agent-linux-amd64" --version)
-[ "$got" = "0.4.0" ]
+[ "$got" = "0.5.0" ]
 
 mkdir -p "$work/src/installer"
 cp "$work/artifact/install.sh" "$work/src/installer/install.sh"
@@ -141,7 +141,7 @@ cp -a "$work/artifact/." "$work/nested/inner/"
 rm -rf "$work/artifact"
 PATH="$work/bin:$PATH" FAMILY_VPN_FAKE_RUN_ID=42 FAMILY_VPN_FAKE_ARTIFACT="$work/nested" \
   bash "$work/src/panel/bootstrap-panel.sh" --fetch-only
-[ "$("$work/src/releases/family-vpn-agent-linux-amd64" --version)" = "0.4.0" ]
+[ "$("$work/src/releases/family-vpn-agent-linux-amd64" --version)" = "0.5.0" ]
 rm -rf "$work/artifact"
 mkdir -p "$work/artifact"
 cp -a "$work/nested/inner/." "$work/artifact/"

@@ -37,8 +37,15 @@ grep -q 'docker-compose-v2' "$pack/panel/install-panel.sh"
 grep -q 'docker pull' "$pack/panel/install-panel.sh"
 grep -q -- '--no-build' "$pack/panel/install-panel.sh"
 
+grep -q 'openssl pkeyutl -verify' "$pack/install-family-vpn.sh"
+grep -q 'EXPECTED_PUB_FP' "$pack/install-family-vpn.sh"
+test -f "$pack/INSTALL.sig"
+test -f "$pack/release-signing.pub"
+grep -q 'configure_ufw_panel' "$pack/panel/install-panel.sh"
+grep -q 'harden_ssh_if_safe' "$pack/panel/install-panel.sh"
+
 cleanbin=$(mktemp -d)
-for tool in bash grep awk sed cat sha256sum dirname id uname date chmod; do
+for tool in bash grep awk sed cat sha256sum dirname id uname date chmod openssl tr mktemp printf; do
   src=$(command -v "$tool" || true)
   if [ -n "$src" ]; then
     printf '#!/bin/bash\nexec %q "$@"\n' "$src" >"$cleanbin/$tool"

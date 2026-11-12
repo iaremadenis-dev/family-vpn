@@ -26,13 +26,25 @@ grep -q 'admin 127.0.0.1:2019' "$ROOT/panel/Caddyfile.https"
 grep -q 'default_sni __PANEL_IP__' "$ROOT/panel/Caddyfile.https"
 grep -q '^https://__PANEL_IP__ {$' "$ROOT/panel/Caddyfile.https"
 
+# Host hardening (configure_ufw_panel / harden_ssh_if_safe) lives only in install-panel.sh.
+# Other panel scripts must still never touch firewall/WireGuard.
 if grep -E 'wg-quick|iptables|nft |ufw |systemctl (stop|restart|disable)|set -x' \
-  "$INSTALL" "$ROOT/panel/renew-cert.sh" "$ROOT/panel/backup-panel.sh" \
+  "$ROOT/panel/renew-cert.sh" "$ROOT/panel/backup-panel.sh" \
   "$ROOT/panel/restore-panel.sh" "$ROOT/panel/backup-wg.sh" "$ROOT/panel/restore-wg.sh" \
   "$ROOT/panel/push-restore.sh"; then
-  echo "installer contains a forbidden mutation or a trace flag" >&2
+  echo "panel ops scripts contain a forbidden mutation or a trace flag" >&2
   exit 1
 fi
+if grep -E 'wg-quick|iptables|nft |systemctl (stop|restart|disable)|set -x' "$INSTALL"; then
+  echo "install-panel.sh contains a forbidden WireGuard/iptables mutation or a trace flag" >&2
+  exit 1
+fi
+grep -q 'configure_ufw_panel' "$INSTALL"
+grep -q 'harden_ssh_if_safe' "$INSTALL"
+grep -q 'PasswordAuthentication no' "$INSTALL"
+grep -q 'BACKUP_NOTE: local age backup is on-box only' "$INSTALL"
+# SSH password disable must be gated on authorized_keys.
+grep -q 'ssh_has_authorized_key' "$INSTALL"
 
 if grep -E 'wg (set|addconf|syncconf)|peer[[:space:]]+delete|--backend' \
   "$INSTALL" "$ROOT/panel/restore-panel.sh" "$ROOT/panel/push-restore.sh"; then

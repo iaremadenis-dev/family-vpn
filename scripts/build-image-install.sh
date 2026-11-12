@@ -56,6 +56,13 @@ case "$IMAGE_REF" in
 esac
 
 [ -f "$ROOT/releases/SHA256SUMS" ] || die "нет releases/SHA256SUMS"
+[ -f "$ROOT/releases/install.sh.sig" ] || die "нет releases/install.sh.sig (сначала build-release.sh)"
+[ -f "$ROOT/keys/release-signing.pub" ] || die "нет keys/release-signing.pub"
+if [ -z "${FAMILY_VPN_RELEASE_SIGNING_KEY:-}" ] \
+  && [ ! -f "$ROOT/keys/release-signing.pem" ] \
+  && [ -z "${FAMILY_VPN_RELEASE_SIGNING_KEY_FILE:-}" ]; then
+  die "нужен production signing key для подписи install-пакета"
+fi
 (
   cd "$ROOT/releases"
   sha256sum -c SHA256SUMS
@@ -97,28 +104,57 @@ chmod 755 "$pack/panel/install-panel.sh" "$pack/panel/update-panel.sh" \
   "$pack/panel/restore-panel.sh" "$pack/panel/restore-wg.sh" \
   "$pack/panel/push-restore.sh"
 cp -a "$ROOT/panel/systemd/." "$pack/panel/systemd/"
-install -m 755 "$ROOT/releases/family-vpn-agent-linux-amd64" "$pack/releases/family-vpn-agent-linux-amd64"
-install -m 755 "$ROOT/releases/install.sh" "$pack/releases/install.sh"
-install -m 644 "$ROOT/releases/SHA256SUMS" "$pack/releases/SHA256SUMS"
+cp "$ROOT/releases/family-vpn-agent-linux-amd64" "$pack/releases/family-vpn-agent-linux-amd64"
+chmod 755 "$pack/releases/family-vpn-agent-linux-amd64"
+cp "$ROOT/releases/install.sh" "$pack/releases/install.sh"
+chmod 755 "$pack/releases/install.sh"
+cp "$ROOT/releases/SHA256SUMS" "$pack/releases/SHA256SUMS"
+chmod 644 "$pack/releases/SHA256SUMS"
+if [ -f "$ROOT/releases/install.sh.sig" ]; then
+  cp "$ROOT/releases/install.sh.sig" "$pack/releases/install.sh.sig"
+  chmod 644 "$pack/releases/install.sh.sig"
+fi
+if [ -f "$ROOT/releases/bootstrap.sh" ]; then
+  cp "$ROOT/releases/bootstrap.sh" "$pack/releases/bootstrap.sh"
+  chmod 755 "$pack/releases/bootstrap.sh"
+fi
+cp "$ROOT/keys/release-signing.pub" "$pack/release-signing.pub"
+chmod 644 "$pack/release-signing.pub"
+PUB_FP=$(sha256sum "$pack/release-signing.pub" | awk '{print $1}')
 
 cat >"$pack/BUNDLE-INFO.txt" <<EOF
 source_commit=$COMMIT
 bundle=image-install
 image_ref=$IMAGE_REF
 image_digest=$DIGEST
+schema_min=1
+schema_max=4
 EOF
 
 cat >"$pack/install-family-vpn.sh" <<EOF
 #!/bin/bash
 # Minimal Family VPN installer. The panel application arrives only as a Docker image.
+# Verifies SHA-256 MANIFEST + Ed25519 signature + pinned pubkey fingerprint before exec.
 set -euo pipefail
 cd "\$(dirname "\$0")"
 IMAGE_REF='$IMAGE_REF'
 IMAGE_DIGEST='$DIGEST'
+EXPECTED_PUB_FP='$PUB_FP'
 if ! sha256sum -c MANIFEST; then
   printf '%s\n' "family-vpn-install: пакет повреждён или подменён" >&2
   exit 1
 fi
+echo "\$EXPECTED_PUB_FP  release-signing.pub" | sha256sum -c -
+SIG_B64=\$(tr -d '\\n' <INSTALL.sig | tr '_-' '/+')
+case \$(( \${#SIG_B64} % 4 )) in
+  2) SIG_B64="\${SIG_B64}==" ;;
+  3) SIG_B64="\${SIG_B64}=" ;;
+esac
+TMP=\$(mktemp)
+trap 'rm -f "\$TMP"' EXIT
+printf '%s' "\$SIG_B64" | openssl base64 -d -A -out "\$TMP"
+openssl pkeyutl -verify -pubin -inkey release-signing.pub -rawin -in MANIFEST -sigfile "\$TMP" >/dev/null \
+  || { printf '%s\n' "family-vpn-install: подпись пакета отклонена" >&2; exit 1; }
 if [ -d app ] || [ -d lib ] || [ -d components ] || [ -f Dockerfile ] || [ -f package.json ]; then
   printf '%s\n' "family-vpn-install: пакет содержит исходники панели и отклонён" >&2
   exit 1
@@ -143,20 +179,25 @@ chmod 755 "$pack/install-family-vpn.sh"
 while IFS= read -r rel; do
   hash=$(sha256sum "$pack/$rel" | awk '{ print $1 }')
   printf '%s  %s\n' "$hash" "$rel" >>"$pack/MANIFEST"
-done < <(find "$pack" -type f ! -name MANIFEST -printf '%P\n' | sort)
+done < <(find "$pack" -type f ! -name MANIFEST ! -name INSTALL.sig ! -name EXPECTED_PUB_FP -printf '%P\n' | sort)
+printf '%s\n' "$PUB_FP" >"$pack/EXPECTED_PUB_FP"
 scan_tree "$pack"
+node "$ROOT/scripts/sign-release-file.mjs" "$pack/MANIFEST"
+mv "$pack/MANIFEST.sig" "$pack/INSTALL.sig"
 
 mkdir -p "$OUT"
 archive="$OUT/family-vpn-install-$SHORT.tar.gz"
 tar -C "$stage" -czf "$archive" family-vpn-install
 archive_hash=$(sha256sum "$archive" | awk '{ print $1 }')
 printf '%s  %s\n' "$archive_hash" "$(basename "$archive")" >"$archive.sha256"
+node "$ROOT/scripts/sign-release-file.mjs" "$archive"
 {
   printf '%s\n' "source_commit=$COMMIT"
   printf '%s\n' "image_ref=$IMAGE_REF"
   printf '%s\n' "image_digest=$DIGEST"
   printf '%s\n' "archive=$(basename "$archive")"
   printf '%s\n' "archive_sha256=$archive_hash"
+  printf '%s\n' "pubkey_fp=$PUB_FP"
   printf '%s\n' "files:"
   tar -tzf "$archive" | sort
 } >"$OUT/IMAGE-INSTALL.txt"
@@ -164,3 +205,4 @@ printf '%s\n' "INSTALL_SHA256=$archive_hash"
 printf '%s\n' "IMAGE_REF=$IMAGE_REF"
 printf '%s\n' "IMAGE_DIGEST=$DIGEST"
 printf '%s\n' "SOURCE_COMMIT=$COMMIT"
+printf '%s\n' "PUB_FP=$PUB_FP"

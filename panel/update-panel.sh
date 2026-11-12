@@ -401,6 +401,8 @@ cmd_update() {
   log "UPDATE_OK image=$IMAGE_DIGEST install_root=$INSTALL_ROOT schema=$schema_after"
   log "previous image stored in $PREV_FILE (keep panel-d587d590518d for rollback)"
   log "data rollback: FAMILY_VPN_ROLLBACK_DATA=1 bash $INSTALL_ROOT/panel/update-panel.sh --rollback"
+  log "local pre-update backup is on-box only; it does not replace offsite age+S3 backup"
+  log "updater does not change WireGuard, UFW, NAT, or SSH; host hardening applies on fresh installs"
   log "do NOT set FAMILY_VPN_REQUIRE_HEARTBEAT_SIG until agent 0.5.0 signed heartbeat is verified"
 }
 
