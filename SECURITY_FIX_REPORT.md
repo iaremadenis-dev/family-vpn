@@ -131,9 +131,11 @@ Production release / deployment / публикация отчёта на GitHub 
 - Relocate ComposeDir `/tmp/family-vpn-install` → `/opt/family-vpn/install`; данные в `/var/lib/family-vpn/panel` не удаляются.
 - Pre-update backup + restore-readiness; `--rollback` образа; `FAMILY_VPN_ROLLBACK_DATA=1` для совместимого отката данных.
 - Симулятор: `scripts/update-panel.test.sh` (PASS). Подписанный pack: `dist/` (не опубликован).
-- Новый panel image на этой машине **не** собран (нет Docker). Для code-upgrade: `build-panel-image.sh` затем `build-panel-update.sh`.
 - Rollback target: `panel-d587d590518d` / `sha256:b5a719f0…`.
-- Команды: `dist/UPDATE-COMMANDS.txt`. Deployment/publish — только после отдельного согласия.
+- **Production image built in CI** (run `43311752988`, tag `panel-35b2d2342111`):
+  - NEW digest: `sha256:a85317d5e322d925c6bd132394940037e49d201d58830d8061bc7cd2d71c4471`
+  - Agent 0.5.0 signed; panel update pack Ed25519-verified; DE-01/NL-01 **not** deployed.
+- Команды: `dist/UPDATE-COMMANDS.txt`. Copy artifacts to panel `/releases/` only after separate approval.
 
 ## Готовность
 

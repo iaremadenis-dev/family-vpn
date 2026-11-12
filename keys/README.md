@@ -40,10 +40,27 @@ bash scripts/verify-signed-release-local.sh
 `scripts/build-release.sh` **refuses** to produce a release without a signing key
 and always embeds mandatory signature verification in `bootstrap.sh`.
 
-## CI
+## CI / GitHub Actions secret
 
-`agent-release` fails unless `FAMILY_VPN_RELEASE_SIGNING_KEY` is set, then builds
-and verifies `install.sh.sig` before uploading artifacts.
+`agent-release` and `panel-image` fail unless `FAMILY_VPN_RELEASE_SIGNING_KEY` is set,
+then build and verify signatures before uploading artifacts.
+
+### Exact setup (do this yourself — never paste the private key into chat)
+
+1. Open https://github.com/iaremadenis-dev/family-vpn/settings/secrets/actions  
+2. **New repository secret**  
+   - Name: `FAMILY_VPN_RELEASE_SIGNING_KEY`  
+   - Value: full contents of your local `keys/release-signing.pem`  
+     (including `-----BEGIN PRIVATE KEY-----` / `-----END PRIVATE KEY-----`)  
+3. Save. Re-run **panel-image** / **agent-release** workflows.
+
+CLI equivalent (from a machine that already has the PEM, never logs the value):
+
+```bash
+gh secret set FAMILY_VPN_RELEASE_SIGNING_KEY --repo iaremadenis-dev/family-vpn < keys/release-signing.pem
+```
+
+Only the public key `keys/release-signing.pub` is committed. The PEM stays gitignored.
 
 ## Verify on a VPS (before running install.sh)
 
