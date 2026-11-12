@@ -81,6 +81,9 @@ printf -v remote_text '%q ' "${remote[@]}"
 if [ "$DRY" -eq 1 ]; then
   printf 'PASSWORD_IN_TERMINAL\n'
   printf 'SHIP git-archive\n'
+  if [ "$MODE" = "new" ]; then
+    printf 'SHIP releases\n'
+  fi
   if [ "$MODE" = "restore" ]; then
     printf 'KEY_STAYS_LOCAL\n'
     if printf '%s' "$remote_text" | grep -F -q -- "$IDENTITY"; then
@@ -127,6 +130,14 @@ fi
 
 ssh "${ssh_opts[@]}" "$HOST" "mkdir -p /opt/family-vpn/app"
 ssh "${ssh_opts[@]}" "$HOST" "tar -x -C /opt/family-vpn/app" <"$archive"
+if [ "$MODE" = "new" ]; then
+  release_names=(family-vpn-agent-linux-amd64 install.sh SHA256SUMS INSTALL.txt bootstrap.sh)
+  for name in "${release_names[@]}"; do
+    [ -f "$ROOT/releases/$name" ] || die "нет releases/$name. Сначала: powershell -File scripts/fetch-agent-release.ps1"
+  done
+  ssh "${ssh_opts[@]}" "$HOST" "mkdir -p /opt/family-vpn/app/releases"
+  tar -C "$ROOT/releases" -cf - "${release_names[@]}" | ssh "${ssh_opts[@]}" "$HOST" "tar -x -C /opt/family-vpn/app/releases"
+fi
 if [ "$MODE" = "restore" ]; then
   command -v age >/dev/null 2>&1 || die "нужен age"
   command -v age-keygen >/dev/null 2>&1 || die "нужен age-keygen"

@@ -41,6 +41,7 @@ cleanup() {
     rm -rf "$TMP_DIR"
   fi
   if [ "$status" -ne 0 ] && [ "$CREATED_WG" -eq 1 ] && [ ! -f "$DATA_DIR/wg-managed-by-installer" ]; then
+    systemctl disable --now wg-quick@wg0 >/dev/null 2>&1 || true
     wg-quick down wg0 >/dev/null 2>&1 || true
     rm -f /etc/wireguard/wg0.conf
     echo "family-vpn-install: incomplete new WireGuard config removed" >&2
@@ -261,7 +262,7 @@ write_agent_unit() {
   cat > /etc/systemd/system/family-vpn-agent.service <<EOF
 [Unit]
 Description=Family VPN Agent
-After=network-online.target
+After=network-online.target wg-quick@wg0.service
 Wants=network-online.target
 
 [Service]
@@ -327,6 +328,10 @@ post_install_check() {
     if command -v wg >/dev/null; then
       wg show wg0 >/dev/null 2>&1 || die "wg0 is not up after install"
     fi
+  fi
+  if [ -f "$DATA_DIR/wg-managed-by-installer" ]; then
+    systemctl is-enabled --quiet wg-quick@wg0 || die "wg-quick@wg0 is not enabled"
+    systemctl is-active --quiet wg-quick@wg0 || die "wg-quick@wg0 is not active"
   fi
   [ -f "$DATA_DIR/agent.json" ] || die "agent state file missing after enroll"
   # Confirm enroll created a pairing code or token without printing secrets.
@@ -581,7 +586,7 @@ else
   require_cmd apt-get
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  apt-get install -y wireguard
+  apt-get install -y wireguard iptables
   iface=$(ip -4 route show default | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
   [ -n "$iface" ] || die "could not detect the external network interface"
   if [ "$SUBNET_SET" -eq 0 ] || [ -z "$SUBNET" ]; then
@@ -612,14 +617,16 @@ EOF
   chmod 600 /etc/wireguard/wg0.conf
   rm -rf "$tmp"
   TMP_KEYS=""
-  if [ "$(sysctl -n net.ipv4.ip_forward)" != "1" ]; then
-    printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-family-vpn.conf
-    sysctl -w net.ipv4.ip_forward=1 >/dev/null
-  fi
-  wg-quick up wg0
-  systemctl enable wg-quick@wg0
+  printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-family-vpn.conf
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null
+  # The unit starts wg0 now and again after reboot. A separate wg-quick up leaves the unit inactive.
+  systemctl daemon-reload
+  systemctl enable --now wg-quick@wg0
+  systemctl is-enabled --quiet wg-quick@wg0 || die "wg-quick@wg0 is not enabled"
+  systemctl is-active --quiet wg-quick@wg0 || die "wg-quick@wg0 is not active"
   : > "$DATA_DIR/wg-managed-by-installer"
   echo "family-vpn-install: new wg0 configured on $iface ($SUBNET)"
+  echo "family-vpn-install: wg-quick@wg0 is enabled and will start on boot"
 fi
 
 write_agent_unit

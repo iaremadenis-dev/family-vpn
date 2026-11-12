@@ -12,6 +12,7 @@ services:
       - /etc/family-vpn/panel.env
     volumes:
       - /var/lib/family-vpn/panel:/data
+      - ../releases:/app/releases:ro
     expose:
       - "3000"
     networks:
