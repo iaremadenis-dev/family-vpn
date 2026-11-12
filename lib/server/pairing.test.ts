@@ -1,29 +1,38 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
 import { getDb, resetDbForTests } from "@/lib/server/db";
 import {
   PAIRING_TTL_MS,
+  acceptAgentNetworkReport,
   claimPairingCode,
   deriveLinkStatus,
   enrollAgent,
   generatePairingCode,
   heartbeatAgent,
+  heartbeatMessage,
   pairingCodeEntropyBits,
   pollEnrollment,
   revokeAgent,
   type AgentReport,
 } from "@/lib/server/pairing";
+import { AGENT_BODY_LIMIT, readAgentJson } from "@/lib/server/agent-body";
+import { getMasterKey } from "@/lib/server/secret";
 
 const dataDir = mkdtempSync(path.join(tmpdir(), "family-vpn-pair-"));
 process.env.FAMILY_VPN_DATA_DIR = dataDir;
 
 function reset() {
   resetDbForTests();
-  for (const name of ["family-vpn.sqlite", "family-vpn.sqlite-wal", "family-vpn.sqlite-shm"]) {
+  for (const name of [
+    "family-vpn.sqlite",
+    "family-vpn.sqlite-wal",
+    "family-vpn.sqlite-shm",
+    "master.key",
+  ]) {
     rmSync(path.join(dataDir, name), { force: true });
   }
 }
@@ -259,5 +268,198 @@ describe("pairing", { concurrency: 1 }, () => {
         }),
       /Слишком много попыток/,
     );
+  });
+
+  test("rejects fake, replayed, and foreign signed heartbeats", () => {
+    reset();
+    const code = generatePairingCode();
+    const enrolled = enroll(code);
+    const claimed = claimPairingCode({
+      name: "HB",
+      location: "Test",
+      code,
+      subjectHash: "hb-sec",
+    });
+    const paired = poll(enrolled.enrollmentId, enrolled.nonce);
+    const token = paired.token!;
+    const timestamp = Math.floor(Date.now() / 1000);
+    const nonce = "nonce-security-test-001";
+
+    assert.throws(
+      () =>
+        heartbeatAgent(
+          token,
+          {
+            version: "0.5.0",
+            report,
+            timestamp,
+            nonce,
+            signature: "not-a-real-signature",
+          },
+          "hb-fake",
+        ),
+      /Подпись/,
+    );
+
+    const ok = heartbeatAgent(
+      token,
+      {
+        version: "0.5.0",
+        report,
+        timestamp,
+        nonce,
+        signature: signature(heartbeatMessage(publicKey, timestamp, nonce)),
+      },
+      "hb-ok",
+    );
+    assert.equal(ok.ok, true);
+
+    assert.throws(
+      () =>
+        heartbeatAgent(
+          token,
+          {
+            version: "0.5.0",
+            report,
+            timestamp,
+            nonce,
+            signature: signature(heartbeatMessage(publicKey, timestamp, nonce)),
+          },
+          "hb-replay",
+        ),
+      /Повтор heartbeat/,
+    );
+
+    const other = generateKeyPairSync("ed25519");
+    const otherSpki = other.publicKey.export({ format: "der", type: "spki" }) as Buffer;
+    const otherPub = otherSpki.subarray(otherSpki.length - 32).toString("base64url");
+    const foreignNonce = "nonce-security-test-002";
+    const foreignSig = sign(
+      null,
+      Buffer.from(heartbeatMessage(otherPub, timestamp, foreignNonce)),
+      other.privateKey,
+    ).toString("base64url");
+    assert.throws(
+      () =>
+        heartbeatAgent(
+          token,
+          {
+            version: "0.5.0",
+            report,
+            timestamp,
+            nonce: foreignNonce,
+            signature: foreignSig,
+          },
+          "hb-foreign",
+        ),
+      /Подпись/,
+    );
+
+    const before = getDb()
+      .prepare("SELECT endpoint, wg_public_key, vpn_subnet FROM servers WHERE id = ?")
+      .get(claimed.serverId);
+    const ts2 = Math.floor(Date.now() / 1000);
+    const n2 = "nonce-security-test-004";
+    heartbeatAgent(
+      token,
+      {
+        version: "0.5.0",
+        report: {
+          ...report,
+          endpoint: "198.51.100.9",
+          publicKey: `${"Z".repeat(43)}=`,
+          subnet: "10.250.0.0/24",
+        },
+        timestamp: ts2,
+        nonce: n2,
+        signature: signature(heartbeatMessage(publicKey, ts2, n2)),
+      },
+      "hb-freeze",
+    );
+    const after = getDb()
+      .prepare("SELECT endpoint, wg_public_key, vpn_subnet FROM servers WHERE id = ?")
+      .get(claimed.serverId);
+    assert.equal(after?.endpoint, before?.endpoint);
+    assert.equal(after?.wg_public_key, before?.wg_public_key);
+    assert.equal(after?.vpn_subnet, before?.vpn_subnet);
+
+    const accepted = acceptAgentNetworkReport(claimed.serverId);
+    assert.equal(accepted.endpoint, "198.51.100.9");
+    const confirmed = getDb()
+      .prepare("SELECT endpoint, vpn_subnet FROM servers WHERE id = ?")
+      .get(claimed.serverId);
+    assert.equal(confirmed?.endpoint, "198.51.100.9");
+    assert.equal(confirmed?.vpn_subnet, "10.250.0.0/24");
+  });
+
+  test("stores delivery token encrypted and survives poll retries", () => {
+    reset();
+    const code = generatePairingCode();
+    const enrolled = enroll(code);
+    claimPairingCode({ name: "Tok", location: "T", code, subjectHash: "tok" });
+    const stored = getDb().prepare("SELECT delivery_token FROM agents").get();
+    assert.ok(stored?.delivery_token);
+    // Ciphertext must not equal the plaintext bearer returned to the agent.
+    assert.ok(String(stored.delivery_token).length > 40);
+
+    const first = poll(enrolled.enrollmentId, enrolled.nonce);
+    const second = poll(enrolled.enrollmentId, enrolled.nonce);
+    assert.equal(first.status, "paired");
+    assert.equal(second.status, "paired");
+    assert.equal(first.token, second.token);
+    assert.ok(first.token && first.token.length > 20);
+    assert.notEqual(first.token, stored.delivery_token);
+  });
+
+  test("rejects oversized agent JSON bodies", async () => {
+    const big = "x".repeat(AGENT_BODY_LIMIT + 8);
+    const request = new Request("http://127.0.0.1/api/agent/heartbeat", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": String(big.length) },
+      body: big,
+    });
+    await assert.rejects(() => readAgentJson(request), /Слишком большой/);
+  });
+
+  test("refuses to replace a corrupted master.key", () => {
+    reset();
+    const keyPath = path.join(dataDir, "master.key");
+    writeFileSync(keyPath, Buffer.alloc(16, 7));
+    assert.throws(() => getMasterKey(), /invalid/);
+  });
+
+  test("legacy unsigned heartbeat still works until REQUIRE flag", () => {
+    reset();
+    delete process.env.FAMILY_VPN_REQUIRE_HEARTBEAT_SIG;
+    const code = generatePairingCode();
+    const enrolled = enroll(code);
+    claimPairingCode({ name: "Legacy", location: "L", code, subjectHash: "legacy" });
+    const token = poll(enrolled.enrollmentId, enrolled.nonce).token!;
+    const result = heartbeatAgent(token, { version: "0.4.0", report }, "legacy-hb");
+    assert.equal(result.ok, true);
+  });
+
+  test("healthy signed heartbeats are not blocked by failure rate limits", () => {
+    reset();
+    const code = generatePairingCode();
+    const enrolled = enroll(code);
+    claimPairingCode({ name: "RL", location: "R", code, subjectHash: "rl-ok" });
+    const token = poll(enrolled.enrollmentId, enrolled.nonce).token!;
+    for (let index = 0; index < 40; index += 1) {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const nonce = `healthy-nonce-${index}-${Date.now()}`;
+      const result = heartbeatAgent(
+        token,
+        {
+          version: "0.5.0",
+          report,
+          timestamp,
+          nonce,
+          signature: signature(heartbeatMessage(publicKey, timestamp, nonce)),
+        },
+        "rl-ok-subject",
+      );
+      assert.equal(result.ok, true);
+    }
   });
 });

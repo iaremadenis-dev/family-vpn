@@ -103,13 +103,13 @@ describe("panel backup and restore", () => {
     const pairing = readFileSync(path.join(normalizedRoot(), "lib/server/pairing.ts"), "utf8");
     const heartbeat = pairing.slice(
       pairing.indexOf("export function heartbeatAgent"),
-      pairing.indexOf("export function revokeAgent"),
+      pairing.indexOf("export function acceptAgentNetworkReport"),
     );
     assert.equal(heartbeat.includes("requestBackup"), false);
     const jobs = readFileSync(path.join(normalizedRoot(), "lib/server/agent-jobs.ts"), "utf8");
     const stats = jobs.slice(jobs.indexOf("export function applyPeerStats"));
     assert.equal(stats.includes("requestBackup"), false);
-    assert.equal(SCHEMA_VERSION, 3);
+    assert.equal(SCHEMA_VERSION, 4);
     requestBackup("config");
   });
 

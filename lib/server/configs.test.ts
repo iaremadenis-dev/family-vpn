@@ -11,6 +11,7 @@ import {
   enrollAgent,
   generatePairingCode,
   heartbeatAgent,
+  pollEnrollment,
   type AgentReport,
 } from "@/lib/server/pairing";
 import { decryptSecret, encryptSecret } from "@/lib/server/secret";
@@ -54,11 +55,11 @@ function signature(message: string): string {
 function pairServer() {
   const pairing = generatePairingCode();
   const timestamp = Math.floor(Date.now() / 1000);
-  enrollAgent(
+  const enrolled = enrollAgent(
     {
       code: pairing,
       publicKey,
-      version: "0.4.0",
+      version: "0.5.0",
       timestamp,
       signature: signature(`family-vpn/v1 enroll\n${publicKey}\n${timestamp}`),
       report,
@@ -71,11 +72,21 @@ function pairServer() {
     code: pairing,
     subjectHash: subject,
   });
-  const agent = getDb()
-    .prepare("SELECT delivery_token FROM agents WHERE server_id = ?")
-    .get(claimed.serverId);
-  const token = String(agent?.delivery_token);
-  heartbeatAgent(token, { version: "0.4.0", report }, subject);
+  const pollTs = Math.floor(Date.now() / 1000);
+  const paired = pollEnrollment(
+    {
+      enrollmentId: enrolled.enrollmentId,
+      publicKey,
+      nonce: enrolled.nonce,
+      timestamp: pollTs,
+      signature: signature(
+        `family-vpn/v1 poll\n${enrolled.enrollmentId}\n${enrolled.nonce}\n${pollTs}`,
+      ),
+    },
+    subject,
+  );
+  const token = String(paired.token);
+  heartbeatAgent(token, { version: "0.5.0", report }, subject);
   return { serverId: claimed.serverId, token };
 }
 
