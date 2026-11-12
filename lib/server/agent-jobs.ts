@@ -224,7 +224,7 @@ export function assertOnlineAgent(serverId: string) {
     throw new UserError("Агент сервера сейчас не на связи. Повторите, когда статус станет Online.");
   }
   if (!agentSupportsPeers(row.agent_version == null ? null : String(row.agent_version))) {
-    throw new UserError("Обновите агент до v0.4.0+, затем повторите операцию.");
+    throw new UserError("Обновите агент до v0.5.0+, затем повторите операцию.");
   }
 }
 

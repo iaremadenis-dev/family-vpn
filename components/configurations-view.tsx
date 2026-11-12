@@ -109,7 +109,7 @@ export function ConfigurationsView({
 
       {onlineServers.length === 0 ? (
         <p className="text-sm text-muted">
-          Для выпуска нужен сервер со статусом Online и агентом v0.4.0+.
+          Для выпуска нужен сервер со статусом Online и агентом v0.5.0+.
         </p>
       ) : null}
 

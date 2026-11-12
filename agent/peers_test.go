@@ -86,11 +86,32 @@ AllowedIPs = 10.200.0.2/32
 }
 
 func TestValidAllowedIPs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wg0.conf")
+	if err := os.WriteFile(path, []byte("[Interface]\nAddress = 10.200.0.1/24\nListenPort = 51820\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := wgConfPath
+	wgConfPath = path
+	defer func() { wgConfPath = old }()
+
 	if !validAllowedIPs("10.200.0.5/32") {
 		t.Fatal("expected valid")
 	}
 	if validAllowedIPs("10.200.0.5") {
 		t.Fatal("prefix required")
+	}
+	if validAllowedIPs("10.200.0.5/24") {
+		t.Fatal("non-/32 must fail")
+	}
+	if validAllowedIPs("0.0.0.0/0") {
+		t.Fatal("default route must fail")
+	}
+	if validAllowedIPs("10.200.0.1/32") {
+		t.Fatal("server address must fail")
+	}
+	if validAllowedIPs("10.201.0.5/32") {
+		t.Fatal("outside subnet must fail")
 	}
 	if validAllowedIPs("10.200.0.5/32; rm -rf /") {
 		t.Fatal("injection must fail")

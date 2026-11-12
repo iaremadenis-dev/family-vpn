@@ -15,11 +15,20 @@ import {
 import { requestBackup } from "@/lib/server/backup-request";
 import { getDb } from "@/lib/server/db";
 import { UserError } from "@/lib/server/errors";
+import { decryptSecret, encryptSecret } from "@/lib/server/secret";
 import type { ClaimedServerSummary } from "@/lib/types";
 
 export const PAIRING_TTL_MS = 15 * 60 * 1000;
 export const HEARTBEAT_FRESH_MS = 45 * 1000;
 const CLOCK_SKEW_MS = 2 * 60 * 1000;
+const NONCE_TTL_MS = 10 * 60 * 1000;
+/** Failed auth / abuse caps. Successful heartbeats are never counted. */
+const LIMIT_ENROLL_FAIL = 8;
+const LIMIT_ENROLL_OK = 20;
+const LIMIT_POLL_FAIL = 60;
+const LIMIT_CLAIM_FAIL = 8;
+const LIMIT_HEARTBEAT_FAIL = 30;
+const LEGACY_TOKEN = /^[A-Za-z0-9_-]{20,128}$/;
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const HOST =
   /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}|[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)$/;
@@ -85,7 +94,7 @@ export function enrollAgent(
   },
   subjectHash: string,
 ): { enrollmentId: string; nonce: string } {
-  assertAttemptAllowed("enroll", subjectHash, 8);
+  assertAttemptAllowed("enroll", subjectHash, LIMIT_ENROLL_FAIL);
   const code = normalizeCode(input.code);
   const publicKey = assertAgentKey(input.publicKey);
   const version = assertVersion(input.version);
@@ -116,6 +125,7 @@ export function enrollAgent(
     return { enrollmentId: String(existing.id), nonce: String(existing.nonce) };
   }
 
+  assertAttemptAllowed("enroll_ok", subjectHash, LIMIT_ENROLL_OK);
   const enrollmentId = randomUUID();
   const nonce = randomBytes(32).toString("base64url");
   db.prepare(
@@ -132,6 +142,7 @@ export function enrollAgent(
     new Date(now.getTime() + PAIRING_TTL_MS).toISOString(),
     now.toISOString(),
   );
+  recordAttempt("enroll_ok", subjectHash);
   return { enrollmentId, nonce };
 }
 
@@ -145,6 +156,7 @@ export function pollEnrollment(
   },
   subjectHash: string,
 ): { status: "pending" | "expired" | "paired"; token?: string } {
+  assertAttemptAllowed("poll", subjectHash, LIMIT_POLL_FAIL);
   assertTimestamp(input.timestamp);
   const publicKey = assertAgentKey(input.publicKey);
   const message = `family-vpn/v1 poll\n${input.enrollmentId}\n${input.nonce}\n${input.timestamp}`;
@@ -172,9 +184,10 @@ export function pollEnrollment(
     return { status: "pending" };
   }
   if (row.revoked_at) throw new UserError("Доступ агента отозван.", 401);
-  if (typeof row.delivery_token === "string" && row.delivery_token) {
-    return { status: "paired", token: row.delivery_token };
-  }
+  const token = readDeliveryToken(
+    typeof row.delivery_token === "string" ? row.delivery_token : null,
+  );
+  if (token) return { status: "paired", token };
   return { status: "paired" };
 }
 
@@ -186,7 +199,7 @@ export function claimPairingCode(input: {
   code: string;
   subjectHash: string;
 }): ClaimedServerSummary {
-  assertAttemptAllowed("claim", input.subjectHash, 8);
+  assertAttemptAllowed("claim", input.subjectHash, LIMIT_CLAIM_FAIL);
   const name = assertLabel(input.name, "Укажите название.", 64);
   const location = assertLabel(input.location, "Укажите расположение.", 80);
   let code = "";
@@ -262,9 +275,17 @@ export function claimPairingCode(input: {
     );
     db.prepare(
       `INSERT INTO agents
-        (server_id, public_key, token_hash, delivery_token, version, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(serverId, String(enrollment.public_key), sha256(token), token, agentVersion, now);
+        (server_id, public_key, token_hash, delivery_token, version, created_at, last_report_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      serverId,
+      String(enrollment.public_key),
+      sha256(token),
+      sealDeliveryToken(token),
+      agentVersion,
+      now,
+      JSON.stringify(report),
+    );
     db.prepare("UPDATE enrollments SET claimed_at = ?, server_id = ? WHERE id = ?").run(
       now,
       serverId,
@@ -299,9 +320,13 @@ export function heartbeatAgent(
     report: AgentReport;
     peers?: unknown;
     jobResults?: unknown;
+    timestamp?: number;
+    nonce?: string;
+    signature?: string;
   },
   subjectHash: string,
 ): { ok: true; jobs: ReturnType<typeof takeJobsForServer> } {
+  assertAttemptAllowed("heartbeat", subjectHash, LIMIT_HEARTBEAT_FAIL);
   if (!token) {
     recordAttempt("heartbeat", subjectHash);
     throw new UserError("Нет учётных данных агента.", 401);
@@ -309,7 +334,9 @@ export function heartbeatAgent(
   const version = assertVersion(input.version);
   const report = assertReport(input.report);
   const row = getDb()
-    .prepare("SELECT server_id, revoked_at FROM agents WHERE token_hash = ?")
+    .prepare(
+      "SELECT server_id, public_key, revoked_at FROM agents WHERE token_hash = ?",
+    )
     .get(sha256(token));
   if (!row || row.revoked_at) {
     recordAttempt("heartbeat", subjectHash);
@@ -317,19 +344,44 @@ export function heartbeatAgent(
   }
 
   const serverId = String(row.server_id);
+  const agentPublicKey = String(row.public_key);
+  const requireSignature = process.env.FAMILY_VPN_REQUIRE_HEARTBEAT_SIG === "1";
+  const hasSignature =
+    typeof input.signature === "string" &&
+    typeof input.nonce === "string" &&
+    Number.isInteger(input.timestamp);
+
+  if (hasSignature || requireSignature) {
+    if (!hasSignature) {
+      recordAttempt("heartbeat", subjectHash);
+      throw new UserError("Подпись heartbeat обязательна.", 401);
+    }
+    assertTimestamp(Number(input.timestamp));
+    const nonce = assertNonce(String(input.nonce));
+    const message = heartbeatMessage(agentPublicKey, Number(input.timestamp), nonce);
+    if (!verifySignature(agentPublicKey, message, String(input.signature))) {
+      recordAttempt("heartbeat", subjectHash);
+      throw new UserError("Подпись агента не принята.", 401);
+    }
+    rememberNonce(serverId, nonce);
+  }
+
   const now = new Date().toISOString();
   const db = getDb();
+  const server = db
+    .prepare(
+      "SELECT endpoint, listen_port, wg_public_key, vpn_subnet, external_interface FROM servers WHERE id = ?",
+    )
+    .get(serverId);
+
+  // Freeze identity fields after pairing (FV-002). Heartbeat only refreshes liveness.
   db.prepare(
     `UPDATE servers
-     SET endpoint = ?, listen_port = ?, wg_public_key = ?, vpn_subnet = ?,
-         external_interface = ?, agent_version = ?, last_seen_at = ?, wg_up = ?, updated_at = ?
+     SET external_interface = ?, agent_version = ?, last_seen_at = ?, wg_up = ?, updated_at = ?
      WHERE id = ?`,
   ).run(
-    report.endpoint,
-    report.listenPort,
-    report.publicKey || null,
-    report.subnet || null,
-    report.externalInterface || null,
+    report.externalInterface ||
+      (server?.external_interface == null ? null : String(server.external_interface)),
     version,
     now,
     report.interfaceUp ? 1 : 0,
@@ -337,13 +389,69 @@ export function heartbeatAgent(
     serverId,
   );
   db.prepare(
-    "UPDATE agents SET version = ?, delivery_token = NULL WHERE server_id = ?",
-  ).run(version, serverId);
+    `UPDATE agents
+     SET version = ?, delivery_token = NULL, last_report_json = ?
+     WHERE server_id = ?`,
+  ).run(version, JSON.stringify(report), serverId);
 
   applyJobResults(serverId, normalizeJobResults(input.jobResults));
   applyPeerStats(serverId, normalizePeerStats(input.peers));
   const jobs = takeJobsForServer(serverId);
   return { ok: true, jobs };
+}
+
+/**
+ * Admin-confirmed adoption of network identity from the latest agent report.
+ * Heartbeat alone never rewrites endpoint / WG public key / subnet.
+ */
+export function acceptAgentNetworkReport(serverId: string): AgentReport {
+  const db = getDb();
+  const agent = db
+    .prepare("SELECT last_report_json, revoked_at FROM agents WHERE server_id = ?")
+    .get(serverId);
+  if (!agent || agent.revoked_at) throw new UserError("У этого сервера нет активного агента.");
+  if (typeof agent.last_report_json !== "string" || !agent.last_report_json) {
+    throw new UserError("Нет свежего отчёта агента для подтверждения.");
+  }
+  const report = assertReport(JSON.parse(String(agent.last_report_json)) as AgentReport);
+  if (!report.publicKey || !report.subnet) {
+    throw new UserError("Отчёт агента неполный для смены сетевых параметров.");
+  }
+  const duplicate = db
+    .prepare(
+      "SELECT id FROM servers WHERE endpoint = ? AND listen_port = ? AND id != ?",
+    )
+    .get(report.endpoint, report.listenPort, serverId);
+  if (duplicate) throw new UserError("Сервер с таким адресом и портом уже есть.");
+  const subnetConflict = db
+    .prepare("SELECT name FROM servers WHERE vpn_subnet = ? AND id != ? LIMIT 1")
+    .get(report.subnet, serverId);
+  if (subnetConflict) {
+    throw new UserError(
+      `VPN-подсеть ${report.subnet} уже используется сервером «${String(subnetConflict.name)}».`,
+    );
+  }
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE servers
+     SET endpoint = ?, listen_port = ?, wg_public_key = ?, vpn_subnet = ?,
+         external_interface = ?, updated_at = ?
+     WHERE id = ?`,
+  ).run(
+    report.endpoint,
+    report.listenPort,
+    report.publicKey,
+    report.subnet,
+    report.externalInterface || null,
+    now,
+    serverId,
+  );
+  requestBackup("agent");
+  return report;
+}
+
+export function heartbeatMessage(publicKey: string, timestamp: number, nonce: string): string {
+  return `family-vpn/v1 heartbeat\n${publicKey}\n${timestamp}\n${nonce}`;
 }
 
 export function revokeAgent(serverId: string) {
@@ -506,5 +614,42 @@ function recordAttempt(scope: string, subjectHash: string) {
   getDb()
     .prepare("INSERT INTO agent_attempts (scope, subject_hash, created_at) VALUES (?, ?, ?)")
     .run(scope, subjectHash, new Date().toISOString());
+}
+
+function sealDeliveryToken(token: string): string {
+  return encryptSecret(token);
+}
+
+function readDeliveryToken(stored: string | null): string | null {
+  if (!stored) return null;
+  try {
+    return decryptSecret(stored);
+  } catch {
+    // Pre-migration rows may still hold a short-lived plaintext token.
+    if (LEGACY_TOKEN.test(stored)) return stored;
+    return null;
+  }
+}
+
+function assertNonce(value: string): string {
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(value)) {
+    throw new UserError("Nonce heartbeat не принят.");
+  }
+  return value;
+}
+
+function rememberNonce(serverId: string, nonce: string) {
+  const db = getDb();
+  const cutoff = new Date(Date.now() - NONCE_TTL_MS).toISOString();
+  db.prepare("DELETE FROM agent_nonces WHERE created_at < ?").run(cutoff);
+  const existing = db
+    .prepare("SELECT 1 AS ok FROM agent_nonces WHERE server_id = ? AND nonce = ?")
+    .get(serverId, nonce);
+  if (existing) {
+    throw new UserError("Повтор heartbeat отклонён.", 401);
+  }
+  db.prepare(
+    "INSERT INTO agent_nonces (server_id, nonce, created_at) VALUES (?, ?, ?)",
+  ).run(serverId, nonce, new Date().toISOString());
 }
 

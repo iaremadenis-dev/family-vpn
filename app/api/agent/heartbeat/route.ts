@@ -9,6 +9,9 @@ export async function POST(request: Request) {
       report?: AgentReport;
       peers?: unknown;
       jobResults?: unknown;
+      timestamp?: number;
+      nonce?: string;
+      signature?: string;
     };
     const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
     const result = heartbeatAgent(
@@ -18,6 +21,9 @@ export async function POST(request: Request) {
         report: body.report as AgentReport,
         peers: body.peers,
         jobResults: body.jobResults,
+        timestamp: body.timestamp,
+        nonce: body.nonce,
+        signature: body.signature,
       },
       agentSubject(request),
     );

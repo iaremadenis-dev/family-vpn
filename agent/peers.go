@@ -12,11 +12,12 @@ import (
 	"strings"
 )
 
-const wgConfPath = "/etc/wireguard/wg0.conf"
+var wgConfPath = "/etc/wireguard/wg0.conf"
 
 var (
-	wgKeyPattern = regexp.MustCompile(`^[A-Za-z0-9+/]{42,44}={0,2}$`)
+	wgKeyPattern     = regexp.MustCompile(`^[A-Za-z0-9+/]{42,44}={0,2}$`)
 	allowedIPPattern = regexp.MustCompile(`^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)/(?:3[0-2]|[12]?\d)$`)
+	ipv4Pattern      = regexp.MustCompile(`^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$`)
 )
 
 type PeerStat struct {
@@ -102,8 +103,8 @@ func applyJob(job Job) JobResult {
 }
 
 func addPeer(publicKey, allowedIPs string) error {
-	if !validAllowedIPs(allowedIPs) {
-		return fmt.Errorf("allowed ips rejected")
+	if err := validatePeerAllowedIPs(allowedIPs); err != nil {
+		return err
 	}
 	if err := exec.Command("wg", "set", "wg0", "peer", publicKey, "allowed-ips", allowedIPs).Run(); err != nil {
 		return err
@@ -259,16 +260,125 @@ func validWgKey(value string) bool {
 }
 
 func validAllowedIPs(value string) bool {
-	parts := strings.Split(value, ",")
-	if len(parts) == 0 || len(parts) > 8 {
+	return validatePeerAllowedIPs(value) == nil
+}
+
+// Peer AllowedIPs must be a single IPv4 /32 inside the local wg0 VPN subnet,
+// and must not equal the server Address host (FV-021).
+func validatePeerAllowedIPs(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || strings.Contains(trimmed, ",") {
+		return fmt.Errorf("allowed ips rejected")
+	}
+	if !allowedIPPattern.MatchString(trimmed) {
+		return fmt.Errorf("allowed ips rejected")
+	}
+	if !strings.HasSuffix(trimmed, "/32") {
+		return fmt.Errorf("allowed ips must be /32")
+	}
+	ip := strings.TrimSuffix(trimmed, "/32")
+	subnet, serverHost, err := localVpnInfo()
+	if err != nil {
+		return err
+	}
+	if ip == serverHost {
+		return fmt.Errorf("allowed ips must not be the server address")
+	}
+	if !ipv4InCidr(ip, subnet) {
+		return fmt.Errorf("allowed ips outside vpn subnet")
+	}
+	return nil
+}
+
+func localVpnInfo() (subnetCIDR string, serverHost string, err error) {
+	raw, readErr := os.ReadFile(wgConfPath)
+	if readErr != nil {
+		return "", "", readErr
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(parts[0]), "Address") {
+			continue
+		}
+		address := strings.TrimSpace(strings.Split(parts[1], ",")[0])
+		host, prefix, parseErr := parseIPv4CIDR(address)
+		if parseErr != nil {
+			return "", "", parseErr
+		}
+		if prefix != 24 && prefix != 16 && prefix != 20 && prefix != 22 && prefix != 23 && prefix != 25 && prefix != 28 {
+			// Accept common VPN prefixes; still require peer /32 inside the network.
+		}
+		network := ipv4Network(host, prefix)
+		return fmt.Sprintf("%s/%d", network, prefix), host, nil
+	}
+	return "", "", fmt.Errorf("wg0 Address not found")
+}
+
+func parseIPv4CIDR(value string) (string, int, error) {
+	parts := strings.Split(value, "/")
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("invalid cidr")
+	}
+	prefix, err := strconv.Atoi(parts[1])
+	if err != nil || prefix < 8 || prefix > 32 {
+		return "", 0, fmt.Errorf("invalid prefix")
+	}
+	if !ipv4Pattern.MatchString(parts[0]) {
+		return "", 0, fmt.Errorf("invalid ipv4")
+	}
+	return parts[0], prefix, nil
+}
+
+func ipv4Network(host string, prefix int) string {
+	ip := ipv4ToInt(host)
+	mask := uint32(0xFFFFFFFF) << (32 - prefix)
+	if prefix == 0 {
+		mask = 0
+	}
+	return intToIPv4(ip & mask)
+}
+
+func ipv4InCidr(host, cidr string) bool {
+	parts := strings.Split(cidr, "/")
+	if len(parts) != 2 {
 		return false
 	}
-	for _, part := range parts {
-		if !allowedIPPattern.MatchString(strings.TrimSpace(part)) {
-			return false
-		}
+	prefix, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return false
 	}
-	return true
+	network := ipv4ToInt(parts[0])
+	ip := ipv4ToInt(host)
+	mask := uint32(0xFFFFFFFF) << (32 - prefix)
+	if prefix == 0 {
+		mask = 0
+	}
+	return (ip & mask) == (network & mask)
+}
+
+func ipv4ToInt(value string) uint32 {
+	fields := strings.Split(value, ".")
+	if len(fields) != 4 {
+		return 0
+	}
+	var out uint32
+	for _, field := range fields {
+		n, _ := strconv.Atoi(field)
+		out = (out << 8) | uint32(n&0xff)
+	}
+	return out
+}
+
+func intToIPv4(value uint32) string {
+	return fmt.Sprintf("%d.%d.%d.%d", byte(value>>24), byte(value>>16), byte(value>>8), byte(value))
 }
 
 func atoi64(value string) int64 {

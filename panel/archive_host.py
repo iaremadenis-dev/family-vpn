@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_MAX = 3
+SCHEMA_MAX = 4
 PANEL_KIND = "family-vpn-panel"
 WG_KIND = "family-vpn-wireguard"
 

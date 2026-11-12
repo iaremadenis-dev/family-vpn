@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const SCHEMA_MAX = 3;
+const SCHEMA_MAX = 4;
 const PANEL_KIND = "family-vpn-panel";
 const WG_KIND = "family-vpn-wireguard";
 

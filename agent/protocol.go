@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,7 +17,7 @@ import (
 	"time"
 )
 
-const agentVersion = "0.4.0"
+const agentVersion = "0.5.0"
 
 var (
 	ErrRevoked = errors.New("agent access revoked")
@@ -136,11 +137,18 @@ func (c *Client) Poll(ctx context.Context) (string, error) {
 }
 
 func (c *Client) Heartbeat(ctx context.Context, report Report, peers []PeerStat, results []JobResult) ([]Job, error) {
+	timestamp := time.Now().Unix()
+	nonce := newNonce()
+	public := base64.RawURLEncoding.EncodeToString(c.Public)
+	message := fmt.Sprintf("family-vpn/v1 heartbeat\n%s\n%d\n%s", public, timestamp, nonce)
 	payload := map[string]any{
 		"version":    agentVersion,
 		"report":     report,
 		"peers":      peers,
 		"jobResults": results,
+		"timestamp":  timestamp,
+		"nonce":      nonce,
+		"signature":  sign(c.Private, message),
 	}
 	var response struct {
 		Error string `json:"error"`
@@ -249,4 +257,13 @@ func (c *Client) post(ctx context.Context, path string, token string, payload an
 
 func sign(private ed25519.PrivateKey, message string) string {
 	return base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, []byte(message)))
+}
+
+func newNonce() string {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		// Fallback keeps heartbeat possible if the OS RNG briefly fails.
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
 }

@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 const globalForDb = globalThis as unknown as { familyVpnDb?: DatabaseSync };
 const migrated = new WeakSet<DatabaseSync>();
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export function dataDirectory(): string {
   const configured = process.env.FAMILY_VPN_DATA_DIR?.trim();
@@ -61,6 +61,15 @@ function migrate(db: DatabaseSync) {
       db.exec(configSchema);
       db.exec(upgradeServersForConfigs);
     }
+    if (version < 4) {
+      db.exec(agentSecuritySchema);
+      const reportColumn = db
+        .prepare("SELECT 1 AS ok FROM pragma_table_info('agents') WHERE name = 'last_report_json'")
+        .get();
+      if (!reportColumn) {
+        db.exec("ALTER TABLE agents ADD COLUMN last_report_json TEXT");
+      }
+    }
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec("COMMIT");
   } catch (cause) {
@@ -74,6 +83,13 @@ function ensureAgentTables(db: DatabaseSync) {
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agents'")
     .get();
   if (!agents) db.exec(agentSchema);
+  db.exec(agentSecuritySchema);
+  const reportColumn = db
+    .prepare("SELECT 1 AS ok FROM pragma_table_info('agents') WHERE name = 'last_report_json'")
+    .get();
+  if (!reportColumn) {
+    db.exec("ALTER TABLE agents ADD COLUMN last_report_json TEXT");
+  }
 }
 
 function ensureConfigTables(db: DatabaseSync) {
@@ -168,6 +184,19 @@ const agentSchema = `
       created_at TEXT NOT NULL
     );
 `;
+
+/** Schema 4: heartbeat replay nonces + last agent report for admin-confirmed network changes. */
+const agentSecuritySchema = `
+    CREATE TABLE IF NOT EXISTS agent_nonces (
+      server_id TEXT NOT NULL,
+      nonce TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (server_id, nonce),
+      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS agent_nonces_created ON agent_nonces (created_at);
+`;
+
 
 const upgradeServersForConfigs = `
     ALTER TABLE servers ADD COLUMN used_vpn_ips_json TEXT;

@@ -810,7 +810,7 @@ cmd_check() {
   grep -q -- '-noservername' "$PANEL_DIR/install-panel.sh"
   grep -q 'default_sni __PANEL_IP__' "$PANEL_DIR/Caddyfile.https"
   grep -q 'KEY_MISMATCH' "$PANEL_DIR/archive-tool.mjs"
-  grep -q 'SCHEMA_MAX = 3' "$PANEL_DIR/archive-tool.mjs"
+  grep -q 'SCHEMA_MAX = 4' "$PANEL_DIR/archive-tool.mjs"
   grep -q 'UPLOAD_OK' "$PANEL_DIR/backup-panel.sh"
   grep -q 'DATA_EXISTS' "$PANEL_DIR/restore-panel.sh"
   grep -q 'DECRYPT_FAIL' "$PANEL_DIR/restore-panel.sh"

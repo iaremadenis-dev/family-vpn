@@ -12,6 +12,8 @@ export function getMasterKey(): Buffer {
   if (existsSync(file)) {
     const raw = readFileSync(file);
     if (raw.length === 32) return raw;
+    // Refuse silent rotation: a wrong-length file would otherwise orphan encrypted secrets.
+    throw new Error("master.key is present but invalid; refusing to replace it");
   }
   const key = randomBytes(32);
   writeFileSync(file, key, { mode: 0o600 });

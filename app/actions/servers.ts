@@ -4,9 +4,10 @@ import { revalidatePath } from "next/cache";
 import { writeAudit } from "@/lib/server/audit";
 import { publicError } from "@/lib/server/errors";
 import { assertSameOrigin, requireAdmin } from "@/lib/server/guard";
-import { claimPairingCode, revokeAgent } from "@/lib/server/pairing";
+import { acceptAgentNetworkReport, claimPairingCode, revokeAgent } from "@/lib/server/pairing";
 import { createHash } from "node:crypto";
 import { headers } from "next/headers";
+import { clientAddressFromHeaders } from "@/lib/server/client-ip";
 import {
   deleteServer,
   getServer,
@@ -63,6 +64,20 @@ export async function revokeAgentAction(id: string): Promise<ActionResult> {
   }
 }
 
+/** Explicit admin confirmation to adopt endpoint/WG key/subnet from the latest agent report. */
+export async function acceptAgentNetworkAction(id: string): Promise<ActionResult> {
+  try {
+    await assertSameOrigin();
+    await requireAdmin();
+    const report = acceptAgentNetworkReport(id);
+    writeAudit("server.network_accept", `${report.endpoint}:${report.listenPort}`);
+    refresh();
+    return { error: null };
+  } catch (cause) {
+    return { error: publicError(cause, "Не удалось подтвердить сетевые параметры.") };
+  }
+}
+
 export async function updateServerAction(
   id: string,
   input: { name: string; location: string },
@@ -112,9 +127,6 @@ function refresh() {
 
 async function adminSubject(): Promise<string> {
   const headerList = await headers();
-  const subject =
-    process.env.FAMILY_VPN_TRUST_PROXY === "1"
-      ? (headerList.get("x-forwarded-for")?.split(",")[0]?.trim() || "admin")
-      : "admin";
+  const subject = clientAddressFromHeaders(headerList) ?? "admin";
   return createHash("sha256").update(`claim:${subject}`).digest("hex");
 }
