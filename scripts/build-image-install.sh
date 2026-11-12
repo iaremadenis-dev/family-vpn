@@ -71,6 +71,7 @@ mkdir -p "$pack/panel/systemd" "$pack/releases"
 
 files=(
   install-panel.sh
+  update-panel.sh
   docker-compose.yml
   docker-compose.image.yml
   Caddyfile.bootstrap
@@ -90,7 +91,8 @@ files=(
 for name in "${files[@]}"; do
   install -m 644 "$ROOT/panel/$name" "$pack/panel/$name"
 done
-chmod 755 "$pack/panel/install-panel.sh" "$pack/panel/renew-cert.sh" \
+chmod 755 "$pack/panel/install-panel.sh" "$pack/panel/update-panel.sh" \
+  "$pack/panel/renew-cert.sh" \
   "$pack/panel/backup-panel.sh" "$pack/panel/backup-wg.sh" \
   "$pack/panel/restore-panel.sh" "$pack/panel/restore-wg.sh" \
   "$pack/panel/push-restore.sh"

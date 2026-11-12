@@ -1,8 +1,13 @@
 # Release signing keys (production)
 
-`release-signing.pub` is the trusted public key for Family VPN install artifacts.
-Its SHA-256 fingerprint is pinned in generated `bootstrap.sh` independently of
-the downloaded installer body.
+`release-signing.pub` is the **production** trusted public key for Family VPN
+install and panel-update artifacts. Its SHA-256 fingerprint is pinned in
+generated `bootstrap.sh` / `panel-update-boot-*.sh` independently of the
+downloaded body.
+
+This is **not** a CI unit-test ephemeral key (`scripts/release-signing.test.sh`
+generates a throwaway key in a temp dir). The production private key must never
+appear in git, Docker images, or release archives.
 
 **Private key rules**
 
@@ -10,6 +15,7 @@ the downloaded installer body.
 - Never put the private key in Docker images, public release archives, or chat.
 - Store the PEM only in the operator secret store and GitHub Actions secret
   `FAMILY_VPN_RELEASE_SIGNING_KEY` (full PEM text).
+- Run `bash scripts/check-signing-key-hygiene.sh` before publishing.
 
 ## Fingerprint of the current committed public key
 
@@ -19,6 +25,8 @@ sha256sum keys/release-signing.pub
 ```
 
 Record this fingerprint offline before trusting the first production install.
+If this fingerprint ever changes, treat it as a key rotation and re-pin every
+bootstrap one-liner.
 
 ## Local signing
 

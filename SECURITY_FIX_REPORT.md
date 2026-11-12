@@ -122,6 +122,18 @@ Production release / deployment / публикация отчёта на GitHub 
 - Локальные подписанные артефакты собраны в `releases/` (не опубликованы).
 - Fingerprint pubkey: `1ec270a068a05c1e1af1a29953e92a29c6c518e0b43b90f1a1f417e47d59e259`
 - Private key: только `keys/release-signing.pem` (gitignored) / GH secret.
+- Hygiene: `scripts/check-signing-key-hygiene.sh` — pem не в git и не в `releases/`/`dist/`; pubkey = production (не ephemeral test key из unit-тестов).
+
+## Image-based panel updater (2026-11-13)
+
+- `panel/update-panel.sh` + `scripts/build-panel-update.sh` для установок из digest-pinned образа (не rsync/build).
+- Проверки: SHA-256, Ed25519, pinned pubkey FP, schema bounds, admin row, non-empty SQLite/master.key.
+- Relocate ComposeDir `/tmp/family-vpn-install` → `/opt/family-vpn/install`; данные в `/var/lib/family-vpn/panel` не удаляются.
+- Pre-update backup + restore-readiness; `--rollback` образа; `FAMILY_VPN_ROLLBACK_DATA=1` для совместимого отката данных.
+- Симулятор: `scripts/update-panel.test.sh` (PASS). Подписанный pack: `dist/` (не опубликован).
+- Новый panel image на этой машине **не** собран (нет Docker). Для code-upgrade: `build-panel-image.sh` затем `build-panel-update.sh`.
+- Rollback target: `panel-d587d590518d` / `sha256:b5a719f0…`.
+- Команды: `dist/UPDATE-COMMANDS.txt`. Deployment/publish — только после отдельного согласия.
 
 ## Готовность
 

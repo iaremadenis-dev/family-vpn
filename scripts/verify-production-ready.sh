@@ -27,10 +27,14 @@ bash -n scripts/run-clean-ubuntu-docker-test.sh
 bash -n scripts/import-panel-data.sh
 bash -n scripts/vps-preflight.sh
 bash -n panel/install-panel.sh
+bash -n panel/update-panel.sh
 bash -n panel/renew-cert.sh
 bash -n panel/push-restore.sh
 bash -n panel/restore-panel.sh
 bash -n panel/restore-wg.sh
+bash -n scripts/build-panel-update.sh
+bash -n scripts/update-panel.test.sh
+bash -n scripts/check-signing-key-hygiene.sh
 bash panel/install-panel.test.sh
 node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/backup-restore.test.ts
 bash installer/preserve-wg.test.sh
@@ -39,6 +43,9 @@ bash installer/onboarding.test.sh
 bash installer/install-from-panel.test.sh
 bash panel/bootstrap-panel.test.sh
 bash scripts/build-image-install.test.sh
+bash scripts/update-panel.test.sh
+bash scripts/build-panel-update.test.sh
+bash scripts/check-signing-key-hygiene.sh
 bash scripts/docker-bootstrap.test.sh
 
 if [ -f releases/SHA256SUMS ]; then
