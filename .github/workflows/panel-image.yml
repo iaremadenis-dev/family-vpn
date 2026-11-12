@@ -25,7 +25,7 @@ jobs:
       - name: Build the agent files used by the installer package
         env:
           FAMILY_VPN_PUBLIC_URL: https://panel.example.com
-          VERSION: "0.4.0"
+          VERSION: "0.5.0"
         run: bash scripts/build-release.sh
 
       - name: Check the image install package

@@ -1,15 +1,16 @@
 #!/bin/bash
-# Family VPN installer 0.4.0
+# Family VPN installer 0.5.0
 # Downloads the agent only from the panel origin and verifies SHA-256 before install.
 # Plain HTTP is accepted only for 127.0.0.1 and localhost (SSH tunnel).
 # A remote panel must use HTTPS. This script does not pipe an unverified
 # remote script into a privileged shell by itself.
-# 0.4.0 adds WireGuard peer jobs via heartbeat; existing wg0.conf peers are preserved.
+# 0.5.0: signed heartbeats; new wg0 gets client-isolation FORWARD rules.
+# --update never rewrites an existing wg0.conf.
 set -euo pipefail
 umask 077
 
 # Must not be named VERSION: sourcing /etc/os-release overwrites VERSION with Ubuntu's field.
-AGENT_VERSION="0.4.0"
+AGENT_VERSION="0.5.0"
 BACKEND=""
 BINARY=""
 SHA256=""
@@ -608,10 +609,12 @@ Address = $address
 ListenPort = $PORT
 PrivateKey = $(cat "$tmp/private")
 PostUp = iptables -t nat -C POSTROUTING -s $network -o $iface -j MASQUERADE || iptables -t nat -A POSTROUTING -s $network -o $iface -j MASQUERADE
-PostUp = iptables -C FORWARD -i wg0 -j ACCEPT || iptables -A FORWARD -i wg0 -j ACCEPT
-PostUp = iptables -C FORWARD -o wg0 -j ACCEPT || iptables -A FORWARD -o wg0 -j ACCEPT
-PostDown = iptables -D FORWARD -i wg0 -j ACCEPT || true
-PostDown = iptables -D FORWARD -o wg0 -j ACCEPT || true
+PostUp = iptables -C FORWARD -i wg0 -o wg0 -j DROP || iptables -I FORWARD 1 -i wg0 -o wg0 -j DROP
+PostUp = iptables -C FORWARD -i wg0 -o $iface -j ACCEPT || iptables -A FORWARD -i wg0 -o $iface -j ACCEPT
+PostUp = iptables -C FORWARD -i $iface -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || iptables -A FORWARD -i $iface -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+PostDown = iptables -D FORWARD -i wg0 -o wg0 -j DROP || true
+PostDown = iptables -D FORWARD -i wg0 -o $iface -j ACCEPT || true
+PostDown = iptables -D FORWARD -i $iface -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT || true
 PostDown = iptables -t nat -D POSTROUTING -s $network -o $iface -j MASQUERADE || true
 EOF
   chmod 600 /etc/wireguard/wg0.conf

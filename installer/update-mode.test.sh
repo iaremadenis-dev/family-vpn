@@ -54,15 +54,15 @@ ID=ubuntu
 VERSION_ID="24.04"
 VERSION="24.04.5 LTS (Noble Numbat)"
 EOF
-AGENT_VERSION="0.4.0"
-VERSION="0.4.0"
+AGENT_VERSION="0.5.0"
+VERSION="0.5.0"
 # shellcheck disable=SC1091
 . "$tmp/os-release"
 [ "$VERSION" = "24.04.5 LTS (Noble Numbat)" ] || {
   echo "fixture did not clobber VERSION as Ubuntu does" >&2
   exit 1
 }
-[ "$AGENT_VERSION" = "0.4.0" ] || {
+[ "$AGENT_VERSION" = "0.5.0" ] || {
   echo "AGENT_VERSION must survive os-release" >&2
   exit 1
 }

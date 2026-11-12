@@ -7,8 +7,8 @@ export type { InstallCommandInfo };
 
 /**
  * Builds the verified install one-liner for the admin UI.
+ * Prefers bootstrap.sh (Ed25519 + pinned pubkey fingerprint + SHA-256) when present.
  * Backend URL comes from FAMILY_VPN_PUBLIC_URL (the origin the VPS must reach).
- * For local tunnel workflows that is typically http://127.0.0.1:13010 — not Windows localhost:3010.
  */
 export async function getInstallCommandInfo(): Promise<InstallCommandInfo> {
   await requireAdmin();
@@ -22,10 +22,10 @@ export async function getInstallCommandInfo(): Promise<InstallCommandInfo> {
 
   const ready = missing.length === 0 && Boolean(backendUrl);
   const installCommand = ready
-    ? buildCommand(backendUrl!, sums.installSha256!, false)
+    ? buildCommand(backendUrl!, sums, false)
     : null;
   const updateCommand = ready
-    ? buildCommand(backendUrl!, sums.installSha256!, true)
+    ? buildCommand(backendUrl!, sums, true)
     : null;
 
   return {
@@ -40,11 +40,22 @@ export async function getInstallCommandInfo(): Promise<InstallCommandInfo> {
   };
 }
 
-function buildCommand(backend: string, installSha: string, update: boolean): string {
+function buildCommand(
+  backend: string,
+  sums: ReleaseSums,
+  update: boolean,
+): string {
   const suffix = update ? " --update" : "";
+  if (sums.bootstrapSha256) {
+    return [
+      `curl -fsSL ${backend}/releases/bootstrap.sh -o /tmp/fvpn-boot.sh`,
+      `echo '${sums.bootstrapSha256}  /tmp/fvpn-boot.sh' | sha256sum -c -`,
+      `sudo bash /tmp/fvpn-boot.sh${suffix}`,
+    ].join(" && ");
+  }
   return [
     `curl -fsSL ${backend}/releases/install.sh -o /tmp/fvpn-install.sh`,
-    `echo '${installSha}  /tmp/fvpn-install.sh' | sha256sum -c -`,
+    `echo '${sums.installSha256}  /tmp/fvpn-install.sh' | sha256sum -c -`,
     `sudo bash /tmp/fvpn-install.sh --backend ${backend}${suffix}`,
   ].join(" && ");
 }
@@ -80,21 +91,29 @@ function isTunnelBackend(url: string): boolean {
   }
 }
 
-async function readReleaseSums(): Promise<{ installSha256: string | null; agentSha256: string | null }> {
+type ReleaseSums = {
+  installSha256: string | null;
+  agentSha256: string | null;
+  bootstrapSha256: string | null;
+};
+
+async function readReleaseSums(): Promise<ReleaseSums> {
   const file = path.resolve(process.cwd(), "releases", "SHA256SUMS");
   try {
     const text = await readFile(file, "utf8");
     let installSha256: string | null = null;
     let agentSha256: string | null = null;
+    let bootstrapSha256: string | null = null;
     for (const line of text.split(/\r?\n/)) {
       const match = line.match(/^\s*([0-9a-fA-F]{64})\s+\*?(\S+)\s*$/);
       if (!match) continue;
       const [, hash, name] = match;
       if (name === "install.sh") installSha256 = hash!.toLowerCase();
       if (name === "family-vpn-agent-linux-amd64") agentSha256 = hash!.toLowerCase();
+      if (name === "bootstrap.sh") bootstrapSha256 = hash!.toLowerCase();
     }
-    return { installSha256, agentSha256 };
+    return { installSha256, agentSha256, bootstrapSha256 };
   } catch {
-    return { installSha256: null, agentSha256: null };
+    return { installSha256: null, agentSha256: null, bootstrapSha256: null };
   }
 }

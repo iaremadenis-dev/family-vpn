@@ -53,6 +53,8 @@ backup.env
 id_rsa
 id_ed25519
 id_ecdsa
+/keys/release-signing.pem
+/keys/*.pem
 
 # real WireGuard and VPN configs
 *.conf
