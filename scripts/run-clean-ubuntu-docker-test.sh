@@ -92,9 +92,10 @@ if [ "$code" -ne 0 ]; then
   printf '%s\n' "CLEAN_UBUNTU_TEST_FAIL code=$code" >&2
   exit "$code"
 fi
-printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_DOCKER_OK'
-printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_CADDY_OK'
-printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_IMAGES_OK'
-printf '%s\n' "$output" | grep -q 'CLEAN_UBUNTU_RESUME_OK'
-printf '%s\n' "$output" | grep -q 'COMPOSE_NOT_RUN'
-printf '%s\n' "$output" | grep -q 'TLS_NOT_CHECKED'
+# Prefer here-strings: `printf | grep -q` trips pipefail when grep exits early.
+grep -q 'CLEAN_UBUNTU_DOCKER_OK' <<<"$output"
+grep -q 'CLEAN_UBUNTU_CADDY_OK' <<<"$output"
+grep -q 'CLEAN_UBUNTU_IMAGES_OK' <<<"$output"
+grep -q 'CLEAN_UBUNTU_RESUME_OK' <<<"$output"
+grep -q 'COMPOSE_NOT_RUN' <<<"$output"
+grep -q 'TLS_NOT_CHECKED' <<<"$output"
