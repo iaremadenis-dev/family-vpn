@@ -3,6 +3,12 @@ name: panel-image
 # Builds the production panel image + signed update pack inside the private repo.
 # Does not deploy to DE-01 / NL-01. Artifacts are uploaded for operator download.
 on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/templates/**"
+      - "scripts/build-two-installers.py"
+      - ".github/workflows/panel-image.yml"
   workflow_dispatch:
     inputs:
       public_url:
@@ -21,7 +27,7 @@ jobs:
   image:
     runs-on: ubuntu-latest
     env:
-      FAMILY_VPN_PUBLIC_URL: ${{ inputs.public_url }}
+      FAMILY_VPN_PUBLIC_URL: ${{ inputs.public_url || 'https://62.133.60.25' }}
       FAMILY_VPN_PREV_PANEL_DIGEST: sha256:b5a719f0148019784f4eb544289fb2acb4174cf1c8b76e70f18f73ac37b09479
       VERSION: "0.5.0"
     steps:
@@ -124,6 +130,19 @@ jobs:
           tar -xOf "$archive" family-vpn-panel-update/BUNDLE-INFO.txt | grep -F "image_digest=$digest"
           [ "$digest" != "$FAMILY_VPN_PREV_PANEL_DIGEST" ]
 
+      - name: Build exactly two signed public entrypoints
+        env:
+          FAMILY_VPN_RELEASE_SIGNING_KEY: ${{ secrets.FAMILY_VPN_RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          python3 scripts/build-two-installers.py
+          (cd dist && sha256sum -c panel.sh.sha256 && sha256sum -c wireguard.sh.sha256)
+          grep -F 'family-vpn-panel' dist/panel.sh
+          grep -F 'family-vpn-wireguard' dist/wireguard.sh
+          test -f dist/panel.sh.sig
+          test -f dist/wireguard.sh.sig
+          bash scripts/two-installers.test.sh
+
       - name: Write operator summary
         run: |
           set -euo pipefail
@@ -140,6 +159,9 @@ jobs:
             echo
             echo "=== PANEL-UPDATE.txt ==="
             cat dist/PANEL-UPDATE.txt
+            echo
+            echo "=== two public entrypoints ==="
+            cat dist/panel.sh.sha256 dist/wireguard.sh.sha256
             echo
             echo "=== agent INSTALL.txt (update command) ==="
             grep -E 'Safe one-line update|curl -fsSL|fingerprint|0\.5\.0' releases/INSTALL.txt || cat releases/INSTALL.txt
@@ -168,18 +190,27 @@ jobs:
             dist/family-vpn-panel-image.tar.sha256
             dist/family-vpn-install-*.tar.gz
             dist/family-vpn-install-*.tar.gz.sha256
+            dist/family-vpn-install-*.tar.gz.sig
+            dist/panel-install-boot-*.sh
+            dist/panel-install-boot-*.sh.sig
             dist/IMAGE-INSTALL.txt
             dist/family-vpn-panel-update-*.tar.gz
             dist/family-vpn-panel-update-*.tar.gz.sha256
             dist/family-vpn-panel-update-*.tar.gz.sig
             dist/panel-update-boot-*.sh
             dist/PANEL-UPDATE.txt
+            dist/panel.sh
+            dist/panel.sh.sha256
+            dist/panel.sh.sig
+            dist/wireguard.sh
+            dist/wireguard.sh.sha256
+            dist/wireguard.sh.sig
             dist/RELEASE-SUMMARY.txt
             releases/**
           if-no-files-found: error
 
       - name: Create GitHub Release (private)
-        if: ${{ inputs.create_github_release }}
+        if: ${{ github.event_name == 'push' || inputs.create_github_release }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -198,12 +229,21 @@ jobs:
             dist/family-vpn-panel-image.tar.sha256 \
             dist/family-vpn-install-*.tar.gz \
             dist/family-vpn-install-*.tar.gz.sha256 \
+            dist/family-vpn-install-*.tar.gz.sig \
+            dist/panel-install-boot-*.sh \
+            dist/panel-install-boot-*.sh.sig \
             dist/IMAGE-INSTALL.txt \
             dist/family-vpn-panel-update-*.tar.gz \
             dist/family-vpn-panel-update-*.tar.gz.sha256 \
             dist/family-vpn-panel-update-*.tar.gz.sig \
             dist/panel-update-boot-*.sh \
             dist/PANEL-UPDATE.txt \
+            dist/panel.sh \
+            dist/panel.sh.sha256 \
+            dist/panel.sh.sig \
+            dist/wireguard.sh \
+            dist/wireguard.sh.sha256 \
+            dist/wireguard.sh.sig \
             dist/RELEASE-SUMMARY.txt \
             releases/family-vpn-agent-linux-amd64 \
             releases/install.sh \
