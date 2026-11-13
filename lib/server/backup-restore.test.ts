@@ -350,7 +350,9 @@ describe("panel backup and restore", () => {
           "S3_PREFIX=lab",
           "",
         ].join("\n"),
+        { mode: 0o600 },
       );
+      chmodSync(deadEnv, 0o600);
       const deadDir = path.join(work, "dead-backups");
       const dead = run(bash, [path.join(normalizedRoot(), "panel/backup-panel.sh")], bashEnv({
         FAMILY_VPN_PANEL_DIR: sourceDir,
