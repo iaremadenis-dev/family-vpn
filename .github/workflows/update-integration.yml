@@ -2,26 +2,10 @@ name: update-integration
 
 # Linux integration for the panel update from stable d587d590518d to this branch.
 # Does not deploy, does not publish a GitHub Release, and does not touch production VPS.
-# Temporary push trigger is limited to this test branch because workflow_dispatch
-# is unavailable until the workflow exists on the default branch. Do not widen it.
+# Manual only. workflow_dispatch is usable after this file exists on the repository
+# default branch; until then re-runs require an explicit GitHub API/CLI dispatch setup.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - cursor/configurations-premium-glass
-    paths:
-      - ".github/workflows/update-integration.yml"
-      - "scripts/update-integration.test.sh"
-      - "scripts/seed-stable-panel.mjs"
-      - "panel/**"
-      - "agent/**"
-      - "installer/**"
-      - "lib/**"
-      - "app/**"
-      - "components/**"
-      - "Dockerfile"
-      - "package.json"
-      - "package-lock.json"
 
 permissions:
   contents: read
