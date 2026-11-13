@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Family VPN: one public entrypoint for new installs and updates.
+# Generated with pinned SHA256 values by scripts/build-two-installers.py.
+set -euo pipefail
+umask 077
+
+BASE='__PUBLIC_URL__'
+INSTALL_BOOT='__INSTALL_BOOT__'
+INSTALL_SHA='__INSTALL_SHA__'
+UPDATE_BOOT='__UPDATE_BOOT__'
+UPDATE_SHA='__UPDATE_SHA__'
+
+die() { printf 'family-vpn-panel: %s\n' "$*" >&2; exit 1; }
+
+case "${1:-}" in
+  --help|-h)
+    echo "Usage: sudo bash panel.sh [--new|--update]"
+    echo "Without a flag, chooses the mode based on existing panel state."
+    exit 0 ;;
+  --new|--update) MODE="${1#--}"; shift ;;
+  "") MODE=auto ;;
+  *) die 'unknown argument (use --new or --update)' ;;
+esac
+[ "$#" -eq 0 ] || die 'unexpected arguments'
+[ "$(id -u)" -eq 0 ] || die 'run with sudo'
+[ -r /etc/os-release ] || die 'Ubuntu 24.04 required'
+(. /etc/os-release; [ "$ID" = ubuntu ] && [ "$VERSION_ID" = 24.04 ]) || die 'Ubuntu 24.04 required'
+
+PANEL_ENV=/etc/family-vpn/panel.env
+PANEL_DB=/var/lib/family-vpn/panel/family-vpn.sqlite
+PANEL_KEY=/var/lib/family-vpn/panel/master.key
+present=0
+for path in "$PANEL_ENV" "$PANEL_DB" "$PANEL_KEY"; do
+  [ ! -e "$path" ] || present=$((present + 1))
+done
+
+if [ "$MODE" = auto ]; then
+  if [ "$present" -eq 0 ]; then MODE=new
+  elif [ "$present" -eq 3 ]; then MODE=update
+  else die 'incomplete installation detected: refusing to alter panel state'
+  fi
+fi
+
+if [ "$MODE" = new ]; then
+  [ "$present" -eq 0 ] || die 'panel data exists; refusing new install'
+  [ -t 0 ] || die 'fresh install requires interactive terminal for email and age PUBLIC key'
+  printf 'Email for HTTPS certificate: ' >/dev/tty
+  IFS= read -r EMAIL </dev/tty
+  printf 'Public age backup key (age1..., never private key): ' >/dev/tty
+  IFS= read -r PUBKEY </dev/tty
+  [[ "$EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || die 'invalid email'
+  [[ "$PUBKEY" =~ ^age1[0-9a-z]{25,}$ ]] || die 'invalid age public key'
+  BOOT=$INSTALL_BOOT
+  EXPECTED_SHA=$INSTALL_SHA
+else
+  [ "$present" -eq 3 ] || die 'missing panel data/env/key; refusing update'
+  [ -s "$PANEL_DB" ] && [ -s "$PANEL_KEY" ] || die 'empty panel data/key; refusing update'
+  BOOT=$UPDATE_BOOT
+  EXPECTED_SHA=$UPDATE_SHA
+fi
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+curl -fsSL "$BASE/releases/$BOOT" -o "$TMP/boot.sh"
+printf '%s  %s\n' "$EXPECTED_SHA" "$TMP/boot.sh" | sha256sum -c - || die 'bootstrap checksum mismatch'
+if [ "$MODE" = new ]; then
+  bash "$TMP/boot.sh" --new --email "$EMAIL" --backup-pubkey "$PUBKEY"
+else
+  bash "$TMP/boot.sh"
+fi
