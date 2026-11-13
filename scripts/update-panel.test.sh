@@ -20,8 +20,13 @@ mkdir -p \
   "$fake_root/tmp/family-vpn-install/releases" \
   "$fake_root/var/lib/family-vpn/panel" \
   "$fake_root/var/lib/family-vpn/backups" \
+  "$fake_root/var/lib/family-vpn/certs" \
+  "$fake_root/var/lib/family-vpn/acme" \
   "$fake_root/etc/family-vpn" \
   "$fake_root/opt/family-vpn"
+printf 'dummy-cert\n' >"$fake_root/var/lib/family-vpn/certs/fullchain.pem"
+printf 'dummy-key\n' >"$fake_root/var/lib/family-vpn/certs/privkey.pem"
+chmod 600 "$fake_root/var/lib/family-vpn/certs/privkey.pem"
 
 # Seed compose files as installed from image package.
 cp "$ROOT/panel/docker-compose.yml" "$fake_root/tmp/family-vpn-install/panel/"
@@ -119,6 +124,14 @@ cat >"$bin/docker" <<EOF
 set -euo pipefail
 STATE="$work/docker-state"
 mkdir -p "\$STATE"
+PANEL_DATA_MOUNT="$fake_root/var/lib/family-vpn/panel"
+CADDYFILE_MOUNT="$fake_root/etc/family-vpn/Caddyfile"
+CERTS_MOUNT="$fake_root/var/lib/family-vpn/certs"
+ACME_MOUNT="$fake_root/var/lib/family-vpn/acme"
+RELEASES_MOUNT="$fake_root/tmp/family-vpn-install/releases"
+if [ -f "\$STATE/panel_data_mount" ]; then PANEL_DATA_MOUNT=\$(cat "\$STATE/panel_data_mount"); fi
+if [ -f "\$STATE/caddyfile_mount" ]; then CADDYFILE_MOUNT=\$(cat "\$STATE/caddyfile_mount"); fi
+if [ -f "\$STATE/certs_mount" ]; then CERTS_MOUNT=\$(cat "\$STATE/certs_mount"); fi
 cmd=\${1:-}
 case "\$cmd" in
   inspect)
@@ -129,22 +142,64 @@ case "\$cmd" in
       if [ "\$prev" = "--format" ]; then format=\$arg; fi
       prev=\$arg
     done
-    if [ "\$name" = "family-vpn-panel" ]; then
-      case "\$format" in
-        *working_dir*)
+    case "\$format" in
+      *working_dir*)
+        if [ "\$name" = "family-vpn-panel" ] || [ "\$name" = "family-vpn-caddy" ]; then
           if [ -f "\$STATE/compose_dir" ]; then cat "\$STATE/compose_dir"
           else printf '%s\n' "$fake_root/tmp/family-vpn-install/panel"
           fi
-          ;;
-        *'.Image'*|*'{{.Image}}'*)
+          exit 0
+        fi
+        ;;
+      *com.docker.compose.project*)
+        if [ "\$name" = "family-vpn-panel" ]; then
+          printf '%s\n' "family-vpn"
+          exit 0
+        fi
+        ;;
+      *Image*)
+        if [ "\$name" = "family-vpn-panel" ]; then
           if [ -f "\$STATE/running_image" ]; then cat "\$STATE/running_image"
           else printf '%s\n' "$DIGEST_OLD"
           fi
-          ;;
-        *) exit 0 ;;
-      esac
-      exit 0
-    fi
+          exit 0
+        fi
+        ;;
+      *Mounts*)
+        # Emulate docker inspect mount Source lookup used by assert_live_bind_mounts.
+        case "\$format" in
+          */data*)
+            [ "\$name" = "family-vpn-panel" ] || exit 1
+            printf '%s\n' "\$PANEL_DATA_MOUNT"
+            exit 0
+            ;;
+          */etc/caddy/Caddyfile*)
+            [ "\$name" = "family-vpn-caddy" ] || exit 1
+            printf '%s\n' "\$CADDYFILE_MOUNT"
+            exit 0
+            ;;
+          */certs*)
+            [ "\$name" = "family-vpn-caddy" ] || exit 1
+            printf '%s\n' "\$CERTS_MOUNT"
+            exit 0
+            ;;
+          */acme*)
+            [ "\$name" = "family-vpn-caddy" ] || exit 1
+            printf '%s\n' "\$ACME_MOUNT"
+            exit 0
+            ;;
+          */srv/releases*)
+            [ "\$name" = "family-vpn-caddy" ] || exit 1
+            printf '%s\n' "\$RELEASES_MOUNT"
+            exit 0
+            ;;
+        esac
+        exit 0
+        ;;
+      *)
+        exit 0
+        ;;
+    esac
     exit 1
     ;;
   image)
@@ -197,6 +252,11 @@ case "\$cmd" in
       if [ -n "\${FAMILY_VPN_PANEL_IMAGE:-}" ]; then
         printf '%s\n' "\$FAMILY_VPN_PANEL_IMAGE" >"\$STATE/running_image"
       fi
+    fi
+    # Require --project-name so orphaned /tmp recoveries keep the live project.
+    if ! printf '%s' "\$*" | grep -q -- '--project-name'; then
+      printf 'compose missing --project-name\n' >&2
+      exit 1
     fi
     exit 0
     ;;
@@ -322,5 +382,64 @@ grep -q "$DIGEST_OLD" "$work/docker-state/running_image"
 echo "== check =="
 bash "$bundle/panel/update-panel.sh" --check | tee "$work/ck.log"
 grep -q 'CHECK_OK' "$work/ck.log"
+
+echo "== refuse mount mismatch (no production changes) =="
+printf '%s\n' "/wrong/data/path" >"$work/docker-state/panel_data_mount"
+if bash "$bundle/panel/update-panel.sh" --dry-run >"$work/mismatch.log" 2>&1; then
+  echo "mount mismatch was accepted" >&2
+  cat "$work/mismatch.log" >&2
+  exit 1
+fi
+grep -q "refuse" "$work/mismatch.log"
+rm -f "$work/docker-state/panel_data_mount"
+
+echo "== orphaned /tmp ComposeDir (image install + reboot wipe) =="
+# Reset install root; keep containers labeled at wiped /tmp path; SQLite stays.
+rm -rf "$fake_root/opt/family-vpn/install"
+rm -rf "$fake_root/tmp/family-vpn-install/panel"
+mkdir -p "$fake_root/tmp/family-vpn-install/releases"
+printf 'published-boot\n' >"$fake_root/tmp/family-vpn-install/releases/keep-me.txt"
+printf '%s\n' "$fake_root/tmp/family-vpn-install/panel" >"$work/docker-state/compose_dir"
+printf '%s\n' "$DIGEST_OLD" >"$work/docker-state/running_image"
+rm -f "$work/docker-state/loaded"
+: >"$work/docker-state/compose.log"
+# renew.env still points at wiped tmp (production after reboot).
+printf 'COMPOSE_PROJECT_DIR=%s/tmp/family-vpn-install/panel\n' "$fake_root" \
+  >"$fake_root/etc/family-vpn/renew.env"
+printf 'COMPOSE_FILE=%s/tmp/family-vpn-install/panel/docker-compose.yml\n' "$fake_root" \
+  >>"$fake_root/etc/family-vpn/renew.env"
+
+bash "$bundle/panel/update-panel.sh" --dry-run 2>&1 | tee "$work/orphan-dry.log"
+grep -q 'ComposeDir missing on disk' "$work/orphan-dry.log"
+grep -q 'MISSING(' "$work/orphan-dry.log"
+grep -q 'DRY_RUN would restore Compose' "$work/orphan-dry.log"
+grep -q 'DRY_RUN ok' "$work/orphan-dry.log"
+# Dry-run must not create permanent compose yet.
+test ! -f "$fake_root/opt/family-vpn/install/panel/docker-compose.yml"
+
+ADMIN_ORPHAN_BEFORE=$(python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select display_name from admin').fetchone()[0])" "$DB_PATH")
+bash "$bundle/panel/update-panel.sh" | tee "$work/orphan-upd.log"
+grep -q 'UPDATE_OK' "$work/orphan-upd.log"
+grep -q 'restored ComposeDir from signed package' "$work/orphan-upd.log"
+test -f "$fake_root/opt/family-vpn/install/panel/docker-compose.yml"
+test -f "$fake_root/opt/family-vpn/install/panel/docker-compose.image.yml"
+test -f "$fake_root/opt/family-vpn/install/releases/keep-me.txt"
+grep -q "$fake_root/opt/family-vpn/install/panel" "$fake_root/etc/family-vpn/renew.env"
+ADMIN_ORPHAN_AFTER=$(python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select display_name from admin').fetchone()[0])" "$DB_PATH")
+[ "$ADMIN_ORPHAN_BEFORE" = "$ADMIN_ORPHAN_AFTER" ]
+test -s "$fake_root/var/lib/family-vpn/panel/master.key"
+SRV2=$(python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('select name from servers').fetchone()[0])" "$DB_PATH")
+[ "$SRV2" = "NL-01" ]
+grep -q -- '--project-name' "$work/docker-state/compose.log"
+# HTTPS health path exercised (fake curl -> 200).
+grep -q 'health ok' "$work/orphan-upd.log"
+
+echo "== orphaned rollback keeps HTTPS path + data =="
+bash "$bundle/panel/update-panel.sh" --rollback | tee "$work/orphan-rb.log"
+grep -q 'ROLLBACK_OK' "$work/orphan-rb.log"
+grep -q "$DIGEST_OLD" "$work/docker-state/running_image"
+test -s "$fake_root/var/lib/family-vpn/panel/family-vpn.sqlite"
+test -f "$fake_root/etc/family-vpn/Caddyfile"
+test -d "$fake_root/var/lib/family-vpn/certs"
 
 echo "update-panel simulator ok"

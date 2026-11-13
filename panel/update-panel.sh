@@ -122,18 +122,119 @@ restore_data_from_backup() {
   log "data restored from $bak"
 }
 
+inspect_compose_label() {
+  local key=$1
+  docker inspect family-vpn-panel --format "{{index .Config.Labels \"$key\"}}" 2>/dev/null || true
+}
+
+inspect_mount_source() {
+  local container=$1
+  local dest=$2
+  docker inspect "$container" --format '{{range .Mounts}}{{if eq .Destination "'"$dest"'"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true
+}
+
+compose_project_name() {
+  local name
+  name=$(inspect_compose_label 'com.docker.compose.project')
+  if [ -n "$name" ]; then
+    printf '%s\n' "$name"
+    return 0
+  fi
+  printf '%s\n' 'family-vpn'
+}
+
 compose_at() {
   local dir=$1
   shift
+  local project
+  project=$(compose_project_name)
   local -a files=(-f "$dir/docker-compose.yml" -f "$dir/docker-compose.image.yml")
   env FAMILY_VPN_PANEL_IMAGE="${FAMILY_VPN_PANEL_IMAGE:-}" \
-    docker compose --project-directory "$dir" --env-file "$ENV_FILE" "${files[@]}" "$@"
+    docker compose --project-name "$project" --project-directory "$dir" --env-file "$ENV_FILE" "${files[@]}" "$@"
+}
+
+# Refuse update when live bind mounts do not match the permanent data/TLS paths.
+assert_live_bind_mounts() {
+  local panel_data caddyfile_src certs_src acme_src
+  docker ps --format '{{.Names}}' | grep -qx 'family-vpn-panel' \
+    || die "panel container not running; refuse update"
+  docker ps --format '{{.Names}}' | grep -qx 'family-vpn-caddy' \
+    || die "caddy container not running; refuse update"
+
+  panel_data=$(inspect_mount_source family-vpn-panel /data)
+  [ -n "$panel_data" ] || die "panel /data mount missing in docker inspect; refuse"
+  [ "$panel_data" = "$STATE_DIR" ] \
+    || die "panel /data mount is '$panel_data', expected $STATE_DIR; refuse (no production changes)"
+
+  caddyfile_src=$(inspect_mount_source family-vpn-caddy /etc/caddy/Caddyfile)
+  [ "$caddyfile_src" = "$ETC_DIR/Caddyfile" ] \
+    || die "caddy Caddyfile mount is '$caddyfile_src', expected $ETC_DIR/Caddyfile; refuse"
+
+  certs_src=$(inspect_mount_source family-vpn-caddy /certs)
+  [ "$certs_src" = "/var/lib/family-vpn/certs" ] \
+    || die "caddy /certs mount is '$certs_src', expected /var/lib/family-vpn/certs; refuse"
+
+  acme_src=$(inspect_mount_source family-vpn-caddy /acme)
+  if [ -n "$acme_src" ] && [ "$acme_src" != "/var/lib/family-vpn/acme" ]; then
+    die "caddy /acme mount is '$acme_src', expected /var/lib/family-vpn/acme; refuse"
+  fi
+
+  [ -s "$STATE_DIR/family-vpn.sqlite" ] || die "sqlite missing/empty at inspected mount $STATE_DIR"
+  [ -s "$STATE_DIR/master.key" ] || die "master.key missing/empty at inspected mount $STATE_DIR"
+  [ -f "$ETC_DIR/Caddyfile" ] || die "missing host Caddyfile $ETC_DIR/Caddyfile"
+  [ -d /var/lib/family-vpn/certs ] || die "missing host certs dir /var/lib/family-vpn/certs"
+  log "live mounts ok: data=$panel_data caddyfile=$caddyfile_src certs=$certs_src"
+}
+
+restore_compose_from_bundle() {
+  [ -d "$PANEL_SRC" ] || die "update package missing panel/ (cannot restore ComposeDir)"
+  [ -f "$PANEL_SRC/docker-compose.yml" ] || die "signed package missing docker-compose.yml"
+  [ -f "$PANEL_SRC/docker-compose.image.yml" ] || die "signed package missing docker-compose.image.yml"
+  mkdir -p "$INSTALL_ROOT/panel" "$INSTALL_ROOT/releases"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "DRY_RUN would restore Compose files into $INSTALL_ROOT/panel from signed package"
+    return 0
+  fi
+  # Materialize compose + helper scripts from the verified signed update package only.
+  local name
+  for name in \
+    docker-compose.yml docker-compose.image.yml \
+    Caddyfile.bootstrap Caddyfile.https \
+    renew-cert.sh backup-panel.sh backup-wg.sh \
+    restore-panel.sh restore-wg.sh push-restore.sh \
+    archive-tool.mjs archive_host.py s3_store.py \
+    backup.env.example certbot-requirements.txt \
+    update-panel.sh install-panel.sh
+  do
+    [ -f "$PANEL_SRC/$name" ] || continue
+    cp "$PANEL_SRC/$name" "$INSTALL_ROOT/panel/$name"
+  done
+  chmod 644 "$INSTALL_ROOT/panel/"* 2>/dev/null || true
+  chmod 755 "$INSTALL_ROOT/panel/"*.sh 2>/dev/null || true
+  if [ -d "$PANEL_SRC/systemd" ]; then
+    mkdir -p "$INSTALL_ROOT/panel/systemd"
+    cp -a "$PANEL_SRC/systemd/." "$INSTALL_ROOT/panel/systemd/"
+  fi
+  # Prefer copying whatever the live caddy releases mount still has (may be /tmp after wipe).
+  local live_releases
+  live_releases=$(inspect_mount_source family-vpn-caddy /srv/releases)
+  if [ -n "$live_releases" ] && [ -d "$live_releases" ]; then
+    cp -a "$live_releases/." "$INSTALL_ROOT/releases/" 2>/dev/null || true
+  fi
+  if [ -d "$BUNDLE_DIR/releases" ]; then
+    cp -a "$BUNDLE_DIR/releases/." "$INSTALL_ROOT/releases/"
+  fi
+  if [ -f "$ETC_DIR/renew.env" ]; then
+    sed -i "s#^COMPOSE_PROJECT_DIR=.*#COMPOSE_PROJECT_DIR=$INSTALL_ROOT/panel#" "$ETC_DIR/renew.env" || true
+    sed -i "s#^COMPOSE_FILE=.*#COMPOSE_FILE=$INSTALL_ROOT/panel/docker-compose.yml#" "$ETC_DIR/renew.env" || true
+  fi
+  log "restored ComposeDir from signed package -> $INSTALL_ROOT/panel"
 }
 
 detect_running_compose_dir() {
   local path
-  path=$(docker inspect family-vpn-panel --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null || true)
-  if [ -n "$path" ] && [ -d "$path" ]; then
+  path=$(inspect_compose_label 'com.docker.compose.project.working_dir')
+  if [ -n "$path" ] && [ -d "$path" ] && [ -f "$path/docker-compose.yml" ]; then
     printf '%s\n' "$path"
     return 0
   fi
@@ -143,6 +244,14 @@ detect_running_compose_dir() {
   fi
   if [ -f /tmp/family-vpn-install/panel/docker-compose.yml ]; then
     printf '%s\n' /tmp/family-vpn-install/panel
+    return 0
+  fi
+  # Label points at a wiped path (typical: /tmp/... after reboot) but containers still run.
+  # Message on stderr so command substitution only captures the sentinel path.
+  if [ -n "$path" ] && [ ! -d "$path" ]; then
+    printf 'family-vpn-panel-update: ComposeDir missing on disk: %s (containers still labeled); will restore under %s\n' \
+      "$path" "$INSTALL_ROOT/panel" >&2
+    printf '%s\n' "__MISSING__:$path"
     return 0
   fi
   return 1
@@ -199,8 +308,20 @@ backup_before_update() {
 
 relocate_install_tree() {
   local from=$1
+  local missing_label=""
+  case "$from" in
+    __MISSING__:*)
+      missing_label=${from#__MISSING__:}
+      from=""
+      ;;
+  esac
   mkdir -p /opt/family-vpn "$INSTALL_ROOT"
-  if [ "$from" = "$INSTALL_ROOT/panel" ]; then
+  if [ -n "$from" ] && [ "$from" = "$INSTALL_ROOT/panel" ]; then
+    return 0
+  fi
+  if [ -n "$missing_label" ]; then
+    log "relocating Compose project from missing $missing_label to $INSTALL_ROOT/panel"
+    restore_compose_from_bundle
     return 0
   fi
   log "relocating Compose project from $from to $INSTALL_ROOT/panel"
@@ -208,6 +329,11 @@ relocate_install_tree() {
     return 0
   fi
   mkdir -p "$INSTALL_ROOT/panel" "$INSTALL_ROOT/releases"
+  if [ ! -d "$from" ]; then
+    log "source ComposeDir gone during relocate; restoring from signed package"
+    restore_compose_from_bundle
+    return 0
+  fi
   # Copy compose + scripts from the running tree first (keeps current Caddy templates).
   cp -a "$from/." "$INSTALL_ROOT/panel/"
   if [ -d "$(dirname "$from")/releases" ]; then
@@ -317,11 +443,17 @@ health_check() {
 
 cmd_check() {
   assert_admin_present
-  docker ps --format '{{.Names}}' | grep -q 'family-vpn-panel' || die "panel container not running"
-  docker ps --format '{{.Names}}' | grep -q 'family-vpn-caddy' || die "caddy container not running"
+  assert_live_bind_mounts
   local dir
   dir=$(detect_running_compose_dir) || die "compose directory not found"
-  log "CHECK_OK compose=$dir image=$(current_image_id) data=$STATE_DIR"
+  case "$dir" in
+    __MISSING__:*)
+      log "CHECK_OK compose=MISSING(${dir#__MISSING__:}) recover_to=$INSTALL_ROOT/panel image=$(current_image_id) data=$STATE_DIR"
+      ;;
+    *)
+      log "CHECK_OK compose=$dir image=$(current_image_id) data=$STATE_DIR"
+      ;;
+  esac
 }
 
 cmd_rollback() {
@@ -330,14 +462,23 @@ cmd_rollback() {
   prev=$(tr -d '[:space:]' <"$PREV_FILE")
   [ -n "$prev" ] || die "previous image id empty"
   docker image inspect "$prev" >/dev/null 2>&1 || die "previous image $prev not present locally"
+  assert_live_bind_mounts
   local dir
   dir=$(detect_running_compose_dir) || dir="$INSTALL_ROOT/panel"
+  case "$dir" in
+    __MISSING__:*)
+      restore_compose_from_bundle
+      dir="$INSTALL_ROOT/panel"
+      ;;
+  esac
   [ -d "$dir" ] || die "compose dir missing: $dir"
   export FAMILY_VPN_PANEL_IMAGE="$prev"
   export FAMILY_VPN_PANEL_DIGEST="$prev"
   # Rewrite overlay image ref for compose.
   printf 'services:\n  panel:\n    image: %s\n' "$prev" >"$dir/docker-compose.rollback.yml"
-  docker compose --project-directory "$dir" --env-file "$ENV_FILE" \
+  local project
+  project=$(compose_project_name)
+  docker compose --project-name "$project" --project-directory "$dir" --env-file "$ENV_FILE" \
     -f "$dir/docker-compose.yml" -f "$dir/docker-compose.rollback.yml" \
     up -d --no-build --pull never \
     || die "rollback compose up failed; data untouched in $STATE_DIR"
@@ -358,13 +499,27 @@ cmd_update() {
   read_bundle_info
   assert_admin_present
   assert_schema_compatible
+  assert_live_bind_mounts
   local from
   from=$(detect_running_compose_dir) || die "cannot locate running ComposeDir"
-  log "current ComposeDir=$from"
+  case "$from" in
+    __MISSING__:*)
+      log "current ComposeDir=MISSING(${from#__MISSING__:}) -> recover $INSTALL_ROOT/panel"
+      ;;
+    *)
+      log "current ComposeDir=$from"
+      ;;
+  esac
   log "current image=$(current_image_id)"
   log "target image=$IMAGE_DIGEST commit=${SOURCE_COMMIT:-unknown}"
+  log "compose project=$(compose_project_name)"
 
   if [ "$DRY_RUN" -eq 1 ]; then
+    case "$from" in
+      __MISSING__:*)
+        log "DRY_RUN would restore Compose from signed package into $INSTALL_ROOT/panel"
+        ;;
+    esac
     log "DRY_RUN ok (no changes)"
     exit 0
   fi
@@ -376,6 +531,9 @@ cmd_update() {
   record_images
   relocate_install_tree "$from"
   install_bundle_files
+  # After relocate/restore, always operate from the permanent install root.
+  [ -f "$INSTALL_ROOT/panel/docker-compose.yml" ] \
+    || die "permanent ComposeDir missing after relocate: $INSTALL_ROOT/panel"
   load_new_image
   switch_stack
   # Confirm DB still present and non-empty after switch — never accept a wiped volume.
