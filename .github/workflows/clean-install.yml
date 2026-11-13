@@ -4,6 +4,13 @@ name: clean-install
 # Does not deploy, does not touch DE-01/NL-01, does not publish releases.
 on:
   workflow_dispatch:
+  # Temporary: allow verification from this branch before the workflow exists on default.
+  push:
+    branches:
+      - cursor/configurations-premium-glass
+    paths:
+      - ".github/workflows/clean-install.yml"
+      - "scripts/clean-install-from-release.test.sh"
 
 permissions:
   contents: read
