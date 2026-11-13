@@ -104,18 +104,27 @@ install_tree() {
   [ -f "$dest/panel/install-panel.sh" ] || die "в коммите $commit нет install-panel.sh"
 }
 
+WG_SERVER_PUB=$(printf '%s=' "$(printf 'A%.0s' {1..43})")
+WG_CLIENT_PUB=$(printf '%s=' "$(printf 'B%.0s' {1..43})")
+
 heartbeat() {
-  local version=$1 cpu=${2:-}
-  local body
+  local version=$1 cpu=${2:-} body response code
   if [ -n "$cpu" ]; then
-    body=$(printf '{"version":"%s","report":{"endpoint":"203.0.113.10","listenPort":51820,"publicKey":"server-public-key=","subnet":"10.200.0.0/24","interfaceName":"wg0","interfaceUp":true,"externalInterface":"eth0","existingConfig":true,"cpuPercent":%s},"peers":[{"publicKey":"client-public-key=","allowedIps":"10.200.0.2/32","rxBytes":5000,"txBytes":7000,"lastHandshake":1700000000}]}' "$version" "$cpu")
+    body=$(printf '{"version":"%s","report":{"endpoint":"203.0.113.10","listenPort":51820,"publicKey":"%s","subnet":"10.200.0.0/24","interfaceName":"wg0","interfaceUp":true,"externalInterface":"eth0","existingConfig":true,"cpuPercent":%s},"peers":[{"publicKey":"%s","allowedIps":"10.200.0.2/32","rxBytes":5000,"txBytes":7000,"lastHandshake":1700000000}]}' "$version" "$WG_SERVER_PUB" "$cpu" "$WG_CLIENT_PUB")
   else
-    body=$(printf '{"version":"%s","report":{"endpoint":"203.0.113.10","listenPort":51820,"publicKey":"server-public-key=","subnet":"10.200.0.0/24","interfaceName":"wg0","interfaceUp":true,"externalInterface":"eth0","existingConfig":true},"peers":[{"publicKey":"client-public-key=","allowedIps":"10.200.0.2/32","rxBytes":5000,"txBytes":7000,"lastHandshake":1700000000}]}' "$version")
+    body=$(printf '{"version":"%s","report":{"endpoint":"203.0.113.10","listenPort":51820,"publicKey":"%s","subnet":"10.200.0.0/24","interfaceName":"wg0","interfaceUp":true,"externalInterface":"eth0","existingConfig":true},"peers":[{"publicKey":"%s","allowedIps":"10.200.0.2/32","rxBytes":5000,"txBytes":7000,"lastHandshake":1700000000}]}' "$version" "$WG_SERVER_PUB" "$WG_CLIENT_PUB")
   fi
-  curl -fsS -X POST "$PUBLIC_URL/api/agent/heartbeat" \
+  response=$(curl -sS -w '\n%{http_code}' -X POST "$PUBLIC_URL/api/agent/heartbeat" \
     -H "Authorization: Bearer $AGENT_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "$body"
+    -d "$body")
+  code=$(printf '%s' "$response" | tail -n 1)
+  body=$(printf '%s' "$response" | sed '$d')
+  if [ "$code" != "200" ]; then
+    printf 'heartbeat HTTP %s: %s\n' "$code" "$body" >&2
+    return 1
+  fi
+  printf '%s' "$body"
 }
 
 verify_password() {

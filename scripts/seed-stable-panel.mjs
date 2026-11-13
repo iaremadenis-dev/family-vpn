@@ -113,19 +113,19 @@ db.prepare(
     (id, name, location, endpoint, listen_port, is_default, created_at, updated_at,
      wg_public_key, vpn_subnet, external_interface, agent_version, last_seen_at, wg_up, used_vpn_ips_json)
    VALUES (?, 'NL-01', 'Amsterdam', '203.0.113.10', 51820, 1, ?, ?,
-     'server-public-key=', '10.200.0.0/24', 'eth0', '0.4.0', ?, 1, ?)`,
-).run("nl-test", now, now, now, JSON.stringify(["10.200.0.2"]));
+     ?, '10.200.0.0/24', 'eth0', '0.4.0', ?, 1, ?)`,
+).run("nl-test", now, now, `${"A".repeat(43)}=`, now, JSON.stringify(["10.200.0.2"]));
 db.prepare(
   `INSERT INTO agents (server_id, public_key, token_hash, delivery_token, version, created_at)
-   VALUES (?, 'agent-public-key=', ?, NULL, '0.4.0', ?)`,
-).run("nl-test", sha256(agentToken), now);
+   VALUES (?, ?, ?, NULL, '0.4.0', ?)`,
+).run("nl-test", `${"C".repeat(43)}=`, sha256(agentToken), now);
 db.prepare(
   `INSERT INTO configs
     (id, server_id, device_name, client_public_key, client_private_key_enc, vpn_ip,
      status, rx_bytes, tx_bytes, last_handshake_at, created_at, updated_at)
-   VALUES ('cfg-test', 'nl-test', 'phone', 'client-public-key=', ?, '10.200.0.2',
+   VALUES ('cfg-test', 'nl-test', 'phone', ?, ?, '10.200.0.2',
      'active', 1000, 2000, ?, ?, ?)`,
-).run(secret, now, now, now);
+).run(`${"B".repeat(43)}=`, secret, now, now, now);
 db.prepare("INSERT INTO audit_log (action, target, created_at) VALUES ('pair', 'nl-test', ?)").run(now);
 db.exec("PRAGMA user_version = 3");
 db.close();
