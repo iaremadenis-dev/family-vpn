@@ -55,6 +55,13 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Install age for backup tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y age
+          age --version
+          age-keygen --version
+
       - name: Prove Docker Compose is available on the runner
         run: |
           docker version

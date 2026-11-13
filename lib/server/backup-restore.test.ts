@@ -37,27 +37,63 @@ function run(command: string, args: string[], env: Record<string, string>) {
   });
 }
 
+function which(commandName: string): string | null {
+  const probe =
+    process.platform === "win32"
+      ? spawnSync("where", [commandName], { encoding: "utf8" })
+      : spawnSync("sh", ["-c", `command -v ${JSON.stringify(commandName)}`], { encoding: "utf8" });
+  if (probe.status !== 0) return null;
+  const line = probe.stdout
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .find(Boolean);
+  return line || null;
+}
+
 function ensureAge(): { age: string; keygen: string } {
+  const systemAge = which("age");
+  const systemKeygen = which("age-keygen");
+  if (systemAge && systemKeygen) {
+    return { age: systemAge, keygen: systemKeygen };
+  }
+
   const tools = path.join(process.env.LOCALAPPDATA ?? os.tmpdir(), "FamilyVPN", "tools", "age");
   mkdirSync(tools, { recursive: true });
+  const binaryName = process.platform === "win32" ? "age.exe" : "age";
   const found = readdirSync(tools, { recursive: true, encoding: "utf8" }).find((name) =>
-    String(name).replaceAll("\\", "/").endsWith("age.exe"),
+    String(name).replaceAll("\\", "/").endsWith(binaryName),
   );
   if (!found) {
-    const download = run("python", [
-      "-c",
-      "import io,pathlib,sys,urllib.request,zipfile; dest=pathlib.Path(sys.argv[1]); data=urllib.request.urlopen(sys.argv[2], timeout=90).read(); zipfile.ZipFile(io.BytesIO(data)).extractall(dest)",
-      tools,
-      "https://github.com/FiloSottile/age/releases/download/v1.2.1/age-v1.2.1-windows-amd64.zip",
-    ], {});
-    assert.equal(download.status, 0, download.stderr);
+    const py = which("python3") ?? which("python") ?? "python";
+    if (process.platform === "win32") {
+      const download = run(py, [
+        "-c",
+        "import io,pathlib,sys,urllib.request,zipfile; dest=pathlib.Path(sys.argv[1]); data=urllib.request.urlopen(sys.argv[2], timeout=90).read(); zipfile.ZipFile(io.BytesIO(data)).extractall(dest)",
+        tools,
+        "https://github.com/FiloSottile/age/releases/download/v1.2.1/age-v1.2.1-windows-amd64.zip",
+      ], {});
+      assert.equal(download.status, 0, download.stderr);
+    } else {
+      const download = run(py, [
+        "-c",
+        "import io,pathlib,sys,tarfile,urllib.request; dest=pathlib.Path(sys.argv[1]); data=urllib.request.urlopen(sys.argv[2], timeout=90).read(); tarfile.open(fileobj=io.BytesIO(data), mode='r:gz').extractall(dest)",
+        tools,
+        "https://github.com/FiloSottile/age/releases/download/v1.2.1/age-v1.2.1-linux-amd64.tar.gz",
+      ], {});
+      assert.equal(download.status, 0, download.stderr);
+    }
   }
   const ageName = readdirSync(tools, { recursive: true, encoding: "utf8" }).find((name) =>
-    String(name).replaceAll("\\", "/").endsWith("age.exe"),
+    String(name).replaceAll("\\", "/").endsWith(binaryName),
   );
-  assert.ok(ageName);
+  assert.ok(ageName, `age binary missing under ${tools}`);
   const age = path.join(tools, String(ageName));
-  return { age, keygen: path.join(path.dirname(age), "age-keygen.exe") };
+  const keygenName = process.platform === "win32" ? "age-keygen.exe" : "age-keygen";
+  return { age, keygen: path.join(path.dirname(age), keygenName) };
+}
+
+function pythonBin(): string {
+  return which("python3") ?? which("python") ?? "python";
 }
 
 function bashEnv(extra: Record<string, string>): Record<string, string> {
@@ -65,7 +101,7 @@ function bashEnv(extra: Record<string, string>): Record<string, string> {
   return {
     FAMILY_VPN_AGE: tools.age,
     FAMILY_VPN_AGE_KEYGEN: tools.keygen,
-    FAMILY_VPN_PYTHON: "python",
+    FAMILY_VPN_PYTHON: pythonBin(),
     FAMILY_VPN_NODE: "node",
     ...extra,
   };
@@ -122,7 +158,7 @@ describe("panel backup and restore", () => {
     writeFileSync(path.join(sourceDir, "setup-token.sha256"), createHash("sha256").update(setupToken).digest("hex"));
     completeSetup("Ada", "correct-horse-1", setupToken);
 
-    const signing = run("python", [
+    const signing = run(pythonBin(), [
       path.join(normalizedRoot(), "panel/s3_store.py"),
       "signing-key",
       "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
@@ -159,7 +195,7 @@ describe("panel backup and restore", () => {
     writeFileSync(pubFile, `${pubkey}\n`);
 
     const port = 39123;
-    const mock = spawn("python", [path.join(normalizedRoot(), "panel/s3_mock.py"), String(port)], {
+    const mock = spawn(pythonBin(), [path.join(normalizedRoot(), "panel/s3_mock.py"), String(port)], {
       cwd: normalizedRoot(),
       stdio: "ignore",
     });
