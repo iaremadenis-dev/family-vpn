@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Family VPN: one public entrypoint for new WireGuard and in-place agent update.
+# Generated with pinned SHA256 by scripts/build-two-installers.py.
+set -euo pipefail
+umask 077
+
+BASE='__PUBLIC_URL__'
+BOOT_SHA='__WIREGUARD_SHA__'
+
+die() { printf 'family-vpn-wireguard: %s\n' "$*" >&2; exit 1; }
+case "${1:-}" in
+  --help|-h)
+    echo "Usage: sudo bash wireguard.sh [--new|--update]"
+    echo "Without a flag, chooses the mode based on existing agent state."
+    exit 0 ;;
+  --new|--update) MODE="${1#--}"; shift ;;
+  "") MODE=auto ;;
+  *) die 'unknown argument (use --new or --update)' ;;
+esac
+[ "$#" -eq 0 ] || die 'unexpected arguments'
+[ "$(id -u)" -eq 0 ] || die 'run with sudo'
+[ -r /etc/os-release ] || die 'Ubuntu 24.04 required'
+(. /etc/os-release; [ "$ID" = ubuntu ] && [ "$VERSION_ID" = 24.04 ]) || die 'Ubuntu 24.04 required'
+
+AGENT_STATE=/var/lib/family-vpn/agent.json
+WG_CONFIG=/etc/wireguard/wg0.conf
+AGENT_BIN=/usr/local/bin/family-vpn-agent
+present=0
+for path in "$AGENT_STATE" "$WG_CONFIG" "$AGENT_BIN"; do
+  [ ! -e "$path" ] || present=$((present + 1))
+done
+
+if [ "$MODE" = auto ]; then
+  if [ "$present" -eq 0 ]; then MODE=new
+  elif [ "$present" -eq 3 ]; then MODE=update
+  else die 'partial or foreign WireGuard installation detected; refusing automatic action'
+  fi
+fi
+if [ "$MODE" = new ]; then
+  [ "$present" -eq 0 ] || die 'WireGuard/agent state exists; refusing new install'
+else
+  [ "$present" -eq 3 ] || die 'agent or wg0.conf missing; refusing update'
+  [ -s "$AGENT_STATE" ] && [ -s "$WG_CONFIG" ] || die 'empty agent state or WireGuard config'
+fi
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+curl -fsSL "$BASE/releases/bootstrap.sh" -o "$TMP/bootstrap.sh"
+printf '%s  %s\n' "$BOOT_SHA" "$TMP/bootstrap.sh" | sha256sum -c - || die 'bootstrap checksum mismatch'
+if [ "$MODE" = update ]; then
+  bash "$TMP/bootstrap.sh" --update
+else
+  bash "$TMP/bootstrap.sh"
+fi
