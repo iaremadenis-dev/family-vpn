@@ -141,6 +141,7 @@ jobs:
           grep -F 'family-vpn-wireguard' dist/wireguard.sh
           test -f dist/panel.sh.sig
           test -f dist/wireguard.sh.sig
+          bash scripts/two-installers.test.sh
 
       - name: Write operator summary
         run: |
