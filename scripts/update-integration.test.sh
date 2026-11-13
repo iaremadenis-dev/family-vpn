@@ -33,6 +33,8 @@ need_cmd() {
 }
 
 cleanup() {
+  docker rm -f family-vpn-caddy-ci >/dev/null 2>&1 || true
+  ip link delete wg-fvpn-ci >/dev/null 2>&1 || true
   if [ -f "$ENV_FILE" ] && [ -d "$APP_DIR/panel" ]; then
     (
       cd "$APP_DIR/panel"
@@ -232,7 +234,31 @@ if [ -r /proc/stat ]; then
 else
   on_fail "/proc/stat missing"
 fi
-note "WG0_NOT_TESTED no safe WireGuard interface was created in CI"
+
+# Ephemeral WireGuard iface on the runner. Not a tunnel to DE-01/NL-01.
+if ! command -v wg >/dev/null 2>&1; then
+  apt-get update >/dev/null
+  apt-get install -y wireguard >/dev/null
+fi
+WG_IFACE=wg-fvpn-ci
+ip link delete "$WG_IFACE" 2>/dev/null || true
+WG_PRIV=$(wg genkey)
+ip link add dev "$WG_IFACE" type wireguard
+printf '%s\n' "$WG_PRIV" >"$WORKDIR/wg-ci.key"
+chmod 600 "$WORKDIR/wg-ci.key"
+wg set "$WG_IFACE" private-key "$WORKDIR/wg-ci.key" listen-port 51821
+ip address add 10.66.66.1/24 dev "$WG_IFACE"
+ip link set "$WG_IFACE" up
+wg show "$WG_IFACE" >/dev/null || on_fail "wg show $WG_IFACE"
+WG_IFINDEX_BEFORE=$(cat "/sys/class/net/$WG_IFACE/ifindex")
+bash "$ROOT/installer/update-rollback.test.sh" || on_fail "agent update sandbox"
+bash "$ROOT/installer/update-mode.test.sh" || on_fail "agent update-mode sandbox"
+[ -d "/sys/class/net/$WG_IFACE" ] || on_fail "wg iface removed during agent update sandbox"
+WG_IFINDEX_AFTER=$(cat "/sys/class/net/$WG_IFACE/ifindex")
+[ "$WG_IFINDEX_BEFORE" = "$WG_IFINDEX_AFTER" ] || on_fail "wg iface recreated during agent update sandbox"
+note "WG0_CI_OK iface=$WG_IFACE ifindex=$WG_IFINDEX_BEFORE agent_update_left_iface=1"
+ip link delete "$WG_IFACE" || true
+rm -f "$WORKDIR/wg-ci.key"
 
 # --- install stable tree exactly as d587d590518d ---
 install_tree "$STABLE" "$APP_DIR"
@@ -295,6 +321,13 @@ mkdir -p "$APP_DIR/releases"
 cp -a "$ROOT/releases/." "$APP_DIR/releases/"
 # Keep panel.env pointing at HTTP for the update health check.
 note "NEW_TREE_OK commit=$(git -C "$ROOT" rev-parse --short "$NEW")"
+
+# Disk room for a WAL-safe VACUUM INTO snapshot before the installer runs.
+DB_BYTES=$(wc -c <"$STATE_DIR/family-vpn.sqlite" | tr -d ' ')
+NEED_KB=$(( (DB_BYTES / 1024) * 3 + 1024 ))
+AVAIL_KB=$(df -Pk "$STATE_DIR" | awk 'NR==2 { print $4 }')
+[ "$AVAIL_KB" -ge "$NEED_KB" ] || on_fail "disk space before update need=${NEED_KB}KiB avail=${AVAIL_KB}KiB"
+note "DISK_OK need_kib=$NEED_KB avail_kib=$AVAIL_KB"
 
 # One-command panel update through the installer (no manual docker image swap).
 export FAMILY_VPN_COMPOSE_EXTRA="$APP_DIR/panel/docker-compose.ci-http.yml"
@@ -377,14 +410,58 @@ note "PANEL_ROLLBACK_OK schema=3 image_restored=1 archive_ok=1"
 # One-command shapes (no fake production URLs).
 grep -q -- '--update' "$APP_DIR/panel/install-from-pc.sh" || on_fail "install-from-pc missing --update"
 grep -q 'install-panel.sh --update' "$APP_DIR/panel/install-from-pc.sh" || on_fail "install-from-pc update target"
+DRY_OUT=$(bash "$ROOT/panel/install-from-pc.sh" --update --host root@127.0.0.1 --dry-run) || on_fail "install-from-pc --update --dry-run"
+printf '%s' "$DRY_OUT" | grep -q 'install-panel.sh --update' || on_fail "dry-run missing remote --update"
+printf '%s' "$DRY_OUT" | grep -q 'SHIP git-archive' || on_fail "dry-run missing git-archive ship"
+note "INSTALL_FROM_PC_UPDATE_DRY_RUN_OK"
 grep -q -- '--update' "$ROOT/releases/INSTALL.txt" || note "AGENT_ONE_LINER_WITHHELD no published PUBLIC_URL in this build"
 note "ONE_COMMAND_PANEL: bash panel/install-from-pc.sh --update --host root@PANEL"
 note "ONE_COMMAND_AGENT: rebuild with FAMILY_VPN_PUBLIC_URL=https://PANEL then use releases/INSTALL.txt update line"
 
+# HTTPS via Caddy with a CI-only self-signed certificate (not Let's Encrypt).
+CERT_CI=/var/lib/family-vpn/certs-ci
+mkdir -p "$CERT_CI" "$ETC_DIR"
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout "$CERT_CI/privkey.pem" -out "$CERT_CI/fullchain.pem" \
+  -days 1 -subj '/CN=127.0.0.1' >/dev/null 2>&1 || on_fail "openssl test cert"
+chmod 600 "$CERT_CI/privkey.pem"
+cat >"$ETC_DIR/Caddyfile.ci-https" <<'EOF'
+{
+	auto_https off
+	admin off
+}
+https://127.0.0.1 {
+	tls /certs/fullchain.pem /certs/privkey.pem
+	reverse_proxy panel:3000
+}
+EOF
+PANEL_NET=$(docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "$(docker ps -aq --filter name=family-vpn-panel | head -n 1)" | head -n 1)
+[ -n "$PANEL_NET" ] || on_fail "panel docker network missing"
+docker rm -f family-vpn-caddy-ci >/dev/null 2>&1 || true
+docker run -d --name family-vpn-caddy-ci --network "$PANEL_NET" \
+  -p 127.0.0.1:8443:443 \
+  -v "$ETC_DIR/Caddyfile.ci-https:/etc/caddy/Caddyfile:ro" \
+  -v "$CERT_CI:/certs:ro" \
+  caddy:2.10-alpine >/dev/null || on_fail "caddy ci container"
+HTTPS_OK=0
+for _ in $(seq 1 30); do
+  if curl -kfsS -o /dev/null --max-time 3 "https://127.0.0.1:8443/login"; then
+    HTTPS_OK=1
+    break
+  fi
+  sleep 1
+done
+[ "$HTTPS_OK" = "1" ] || on_fail "https test-cert /login"
+HTTPS_CODE=$(curl -ksS -o /dev/null -w '%{http_code}' "https://127.0.0.1:8443/login")
+[ "$HTTPS_CODE" = "200" ] || on_fail "https test-cert HTTP $HTTPS_CODE"
+docker rm -f family-vpn-caddy-ci >/dev/null 2>&1 || true
+note "HTTPS_TEST_CERT_OK port=8443 caddy=2.10-alpine"
+note "LETS_ENCRYPT_STATUS=NOT_CHECKED no public IP ACME in CI"
+
 note "VERIFY_PRODUCTION_READY_EXTERNAL prepared by the workflow before sudo"
 
-note "HTTPS_STATUS=NOT_CHECKED"
-note "WG0_STATUS=NOT_TESTED"
+note "HTTPS_STATUS=TEST_CERT_OK"
+note "WG0_STATUS=CI_IFACE_OK"
 note "RESULT=PASS"
 write_report
 printf '%s\n' "UPDATE_INTEGRATION_OK report=$REPORT"

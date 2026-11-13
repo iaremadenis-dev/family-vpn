@@ -800,8 +800,20 @@ archive_tool() {
   "$PYTHON" "$(to_host_path "$PANEL_DIR/archive_host.py")" "$command" "${args[@]}"
 }
 
+require_snapshot_space() {
+  local db_bytes need_kb avail_kb
+  [ -f "$STATE_DIR/family-vpn.sqlite" ] || die "SQLITE_MISSING: обновление не создаёт новую базу"
+  db_bytes=$(wc -c <"$STATE_DIR/family-vpn.sqlite" | tr -d ' ')
+  # VACUUM INTO needs roughly another full copy, plus room for master.key/env/manifest.
+  need_kb=$(( (db_bytes / 1024) * 3 + 1024 ))
+  avail_kb=$(df -Pk "$STATE_DIR" | awk 'NR==2 { print $4 }')
+  [ -n "$avail_kb" ] || die "DISK_CHECK_FAIL: не удалось прочитать свободное место"
+  [ "$avail_kb" -ge "$need_kb" ] || die "DISK_FULL: нужно >= ${need_kb} KiB свободно для снимка, доступно ${avail_kb} KiB"
+}
+
 take_panel_snapshot() {
   local stamp dir name
+  require_snapshot_space
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   dir="$PREUPDATE_DIR/$stamp"
   mkdir -p "$dir"
