@@ -202,6 +202,10 @@ compose() {
   if [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ]; then
     files+=(-f "$PANEL_DIR/docker-compose.image.yml")
   fi
+  # Optional extra compose file for CI HTTP checks. Production never sets this.
+  if [ -n "${FAMILY_VPN_COMPOSE_EXTRA:-}" ]; then
+    files+=(-f "$FAMILY_VPN_COMPOSE_EXTRA")
+  fi
   docker compose --project-directory "$PANEL_DIR" --env-file "$ENV_FILE" "${files[@]}" "$@"
 }
 

@@ -404,6 +404,8 @@ print(connection.execute("select display_name from admin where id = 1").fetchone
 
 grep -q '/var/lib/family-vpn/panel:/data' "$ROOT/panel/docker-compose.yml"
 grep -q 'compose up -d --build --no-deps panel' "$INSTALL"
+grep -q 'FAMILY_VPN_COMPOSE_EXTRA' "$INSTALL"
+grep -q '127.0.0.1:3000:3000' "$ROOT/panel/docker-compose.ci-http.yml"
 
 rm -rf "$update_root" "$empty_state"
 rm -rf "$data" "$empty" "$out"

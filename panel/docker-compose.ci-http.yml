@@ -1,0 +1,9 @@
+# CI-only override. Publishes the panel on loopback HTTP.
+# Production keeps the panel on the internal network behind Caddy.
+services:
+  panel:
+    ports:
+      - "127.0.0.1:3000:3000"
+  caddy:
+    profiles:
+      - production-tls

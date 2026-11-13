@@ -1,0 +1,68 @@
+name: update-integration
+
+# Manual Linux integration for the panel update from stable d587d590518d to this branch.
+# Does not deploy, does not publish a GitHub Release, and does not touch production VPS.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache-dependency-path: agent/go.mod
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Prove Docker Compose is available on the runner
+        run: |
+          docker version
+          docker compose version
+          echo "RUNNER_DOCKER_OK"
+
+      - name: Run the update integration on the host Docker daemon
+        run: |
+          sudo env \
+            "PATH=$PATH" \
+            "HOME=$HOME" \
+            "FAMILY_VPN_STABLE_COMMIT=d587d590518d" \
+            "FAMILY_VPN_NEW_COMMIT=HEAD" \
+            "FAMILY_VPN_INTEGRATION_REPORT=$GITHUB_WORKSPACE/dist/update-integration-report.txt" \
+            bash "$GITHUB_WORKSPACE/scripts/update-integration.test.sh"
+
+      - name: Upload private test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-integration-${{ github.run_id }}
+          path: |
+            dist/update-integration-report.txt
+            releases/SHA256SUMS
+            releases/INSTALL.txt
+            releases/family-vpn-agent-linux-amd64
+            releases/install.sh
+          if-no-files-found: warn
+          retention-days: 14
