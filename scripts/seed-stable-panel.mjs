@@ -79,6 +79,23 @@ db.exec(`
     target TEXT,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE login_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE enrollments (
+    id TEXT PRIMARY KEY,
+    code_hash TEXT NOT NULL UNIQUE,
+    public_key TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    version TEXT NOT NULL,
+    report_json TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    claimed_at TEXT,
+    server_id TEXT,
+    created_at TEXT NOT NULL
+  );
   CREATE TABLE agents (
     server_id TEXT PRIMARY KEY,
     public_key TEXT NOT NULL,
@@ -86,6 +103,12 @@ db.exec(`
     delivery_token TEXT,
     version TEXT,
     revoked_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE agent_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL,
+    subject_hash TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
   CREATE TABLE configs (
@@ -96,11 +119,28 @@ db.exec(`
     client_private_key_enc TEXT NOT NULL,
     vpn_ip TEXT NOT NULL,
     status TEXT NOT NULL,
+    last_error TEXT,
     rx_bytes INTEGER,
     tx_bytes INTEGER,
     last_handshake_at TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    revoked_at TEXT,
+    UNIQUE (server_id, vpn_ip)
+  );
+  CREATE TABLE agent_jobs (
+    id TEXT PRIMARY KEY,
+    server_id TEXT NOT NULL,
+    config_id TEXT,
+    type TEXT NOT NULL,
+    public_key TEXT NOT NULL,
+    allowed_ips TEXT,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
   );
 `);
 

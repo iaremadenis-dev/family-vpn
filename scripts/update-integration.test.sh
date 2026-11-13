@@ -58,6 +58,9 @@ write_report() {
 
 on_fail() {
   note "FAIL $*"
+  if command -v docker >/dev/null 2>&1; then
+    docker logs "$(docker ps -aq --filter name=family-vpn-panel | head -n 1)" 2>&1 | tail -n 80 || true
+  fi
   write_report
   exit 1
 }
