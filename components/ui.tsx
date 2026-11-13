@@ -228,7 +228,7 @@ export function Dialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center">
-      <div className="absolute inset-0 bg-[#04101c]/70 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      <div className="absolute inset-0 bg-[#10243a]/25 backdrop-blur-sm dark:bg-[#04101c]/70" onClick={onClose} aria-hidden="true" />
       <div
         role="dialog"
         aria-modal="true"

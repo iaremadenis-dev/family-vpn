@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useState, useTransition } from "react";
+import { useEffect, useId, useMemo, useState, useTransition, type ReactNode } from "react";
 import {
   claimServerAction,
   deleteServerAction,
@@ -11,21 +11,22 @@ import {
   updateServerAction,
 } from "@/app/actions/servers";
 import { IconServer } from "@/components/icons";
-import {
-  Button,
-  Dialog,
-  EmptyState,
-  Field,
-  PageHeader,
-  RowMark,
-  StatusBadge,
-  inputClass,
-  itemRowClass,
-  serverRowGrid,
-} from "@/components/ui";
+import { Button, Dialog, Field, StatusBadge, inputClass } from "@/components/ui";
+import { DEMO_UI_BLOCKED } from "@/lib/demo-ui";
 import { cx } from "@/lib/cx";
 import { formatDateTime } from "@/lib/format";
-import type { ClaimedServerSummary, InstallCommandInfo, ServerRecord } from "@/lib/types";
+import type { ClaimedServerSummary, ConfigRecord, InstallCommandInfo, LinkStatus, ServerRecord } from "@/lib/types";
+
+type StatusFilter = "all" | LinkStatus;
+type CountryCode = "NL" | "DE" | "US" | "SG";
+
+const statusFilters: Array<{ value: StatusFilter; label: string }> = [
+  { value: "all", label: "Все статусы" },
+  { value: "online", label: "В сети" },
+  { value: "degraded", label: "Нестабилен" },
+  { value: "offline", label: "Не в сети" },
+  { value: "unchecked", label: "Не подключён" },
+];
 
 type DialogState =
   | { type: "closed" }
@@ -37,18 +38,43 @@ type DialogState =
 
 export function ServersView({
   servers,
+  configs,
   install,
+  demo = false,
 }: {
   servers: ServerRecord[];
+  configs: ConfigRecord[];
   install: InstallCommandInfo;
+  demo?: boolean;
 }) {
   const router = useRouter();
+  const searchId = useId();
+  const statusId = useId();
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [openId, setOpenId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogState>({ type: "closed" });
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const close = () => setDialog({ type: "closed" });
+  const configCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const config of configs) counts.set(config.serverId, (counts.get(config.serverId) ?? 0) + 1);
+    return counts;
+  }, [configs]);
+  const visible = useMemo(
+    () => filterServers(servers, query, statusFilter),
+    [servers, query, statusFilter],
+  );
+  const online = servers.filter((server) => server.linkStatus === "online").length;
+  const offline = servers.filter((server) => server.linkStatus === "offline").length;
+  const paired = servers.filter((server) => server.paired && !server.agentRevoked).length;
 
   function run(action: () => Promise<{ error: string | null }>) {
+    if (demo) {
+      setMessage(DEMO_UI_BLOCKED);
+      return;
+    }
     setMessage(null);
     startTransition(async () => {
       const result = await action();
@@ -63,96 +89,107 @@ export function ServersView({
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader
-        kicker="Инфраструктура"
-        title="Серверы"
-        description="Одна команда на чистом VPS, затем код привязки в панели. Статус берётся только из сообщений агента."
-        action={
-          <Button onClick={() => setDialog({ type: "pair" })} disabled={pending}>
-            Добавить сервер
-          </Button>
-        }
-      />
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="max-w-3xl">
+          <h2 className="text-lg font-semibold tracking-tight text-ink">Серверы</h2>
+          {demo ? <p className="mt-1 text-xs font-medium text-warn">Демо-данные</p> : null}
+          <p className="mt-1 text-sm text-muted">
+            Одна команда на чистом VPS, затем код привязки в панели. Статус берётся только из сообщений агента.
+          </p>
+        </div>
+        <Button onClick={() => setDialog({ type: "pair" })} disabled={pending}>
+          Добавить сервер
+        </Button>
+      </div>
 
       {message && dialog.type === "closed" ? <p className="text-sm text-bad">{message}</p> : null}
 
-      {servers.length === 0 ? (
-        <EmptyState
-          title="Серверов в базе нет"
-          text="Запустите установщик на VPS, затем введите здесь название и код привязки. Панель сама на сервер по SSH не заходит."
-        />
-      ) : (
-        <div className="flex flex-col gap-2">
-          {servers.map((server) => (
-            <article key={server.id} className={cx(itemRowClass, serverRowGrid)}>
-              <div className="col-span-2 flex min-w-0 items-center gap-3 lg:col-span-1">
-                <RowMark>
-                  <IconServer className="h-4 w-4" />
-                </RowMark>
-                <p className="min-w-0 truncate text-sm font-medium text-ink">
-                  {server.name}
-                  {server.isDefault ? (
-                    <span className="ml-2 text-xs font-medium text-info">по умолчанию</span>
-                  ) : null}
-                </p>
-              </div>
-              <div className="min-w-0">
-                <p className="text-[11px] text-muted lg:hidden">IP</p>
-                <p className="truncate font-mono text-sm text-ink">
-                  {server.endpoint}:{server.listenPort}
-                </p>
-              </div>
-              <div className="min-w-0">
-                <p className="text-[11px] text-muted lg:hidden">Расположение</p>
-                <p className="truncate text-sm text-ink">{server.location}</p>
-              </div>
-              <StatusBadge status={server.linkStatus} />
-              <div className="min-w-0">
-                <p className="text-[11px] text-muted lg:hidden">Агент</p>
-                <p className="truncate text-sm text-muted" title={seenTitle(server)}>
-                  {server.agentRevoked
-                    ? "доступ отозван"
-                    : server.agentVersion
-                      ? `v${server.agentVersion}`
-                      : "нет данных"}
-                </p>
-              </div>
-              <div className="col-span-2 flex flex-wrap justify-end gap-1.5 lg:col-span-1">
-                <Button size="sm" variant="secondary" onClick={() => setDialog({ type: "status", server })}>
-                  Статус
-                </Button>
-                <Button size="sm" variant="secondary" onClick={() => setDialog({ type: "edit", server })}>
-                  Изменить
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={server.isDefault || pending}
-                  onClick={() => run(() => setDefaultServerAction(server.id))}
-                >
-                  Сделать по умолчанию
-                </Button>
-                {server.paired && !server.agentRevoked ? (
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    onClick={() => setDialog({ type: "revoke", server })}
-                  >
-                    Отвязать
-                  </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="danger"
-                  onClick={() => setDialog({ type: "delete", server })}
-                >
-                  Удалить
-                </Button>
-              </div>
-            </article>
-          ))}
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Kpi label="Всего VPN-серверов" value={String(servers.length)} hint="в панели" icon={<IconServer className="h-5 w-5" />} />
+        <Kpi label="Серверы в сети" value={String(online)} hint="статус «В сети»" icon={<IconPulse />} />
+        <Kpi label="Серверы не в сети" value={String(offline)} hint="статус «Не в сети»" icon={<IconOffline />} />
+        <Kpi label="Привязанные агенты" value={String(paired)} hint="доступ не отозван" icon={<IconLink />} />
+      </section>
+
+      <section className="glass overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-line px-3 py-3 sm:flex-row sm:items-end sm:justify-between md:px-4">
+          <h3 className="text-sm font-medium text-ink">VPN-серверы</h3>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="sm:w-64">
+              <label htmlFor={searchId} className="mb-1 block text-[11px] text-muted">
+                Поиск
+              </label>
+              <input
+                id={searchId}
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Название, страна или IP"
+                className={inputClass}
+              />
+            </div>
+            <div className="sm:w-44">
+              <label htmlFor={statusId} className="mb-1 block text-[11px] text-muted">
+                Статус
+              </label>
+              <select
+                id={statusId}
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+                className={inputClass}
+              >
+                {statusFilters.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
-      )}
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-left text-sm">
+            <thead>
+              <tr className="border-b border-line text-[11px] tracking-wide text-muted uppercase">
+                <th className="px-2.5 py-2 font-medium whitespace-nowrap">Сервер</th>
+                <th className="px-2.5 py-2 font-medium whitespace-nowrap">Публичный IP</th>
+                <th className="px-2.5 py-2 font-medium whitespace-nowrap">Статус</th>
+                <th className="px-2.5 py-2 text-center font-medium whitespace-nowrap">Конфигурации</th>
+                <th className="px-2.5 py-2 font-medium whitespace-nowrap">Версия агента</th>
+                <th className="px-2.5 py-2 font-medium whitespace-nowrap">Последняя связь</th>
+                <th className="px-2.5 py-2 font-medium whitespace-nowrap">WireGuard-порт</th>
+                <th className="px-2.5 py-2 text-right font-medium whitespace-nowrap">Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-sm text-muted">
+                    {servers.length === 0
+                      ? "Серверов в базе нет. Запустите установщик на VPS, затем введите название и код привязки. Панель сама на сервер по SSH не заходит."
+                      : "Нет данных"}
+                  </td>
+                </tr>
+              ) : (
+                visible.map((server) => (
+                  <ServerRows
+                    key={server.id}
+                    server={server}
+                    configCount={configCounts.get(server.id) ?? 0}
+                    open={openId === server.id}
+                    pending={pending}
+                    onToggle={() => setOpenId(openId === server.id ? null : server.id)}
+                    onStatus={() => setDialog({ type: "status", server })}
+                    onEdit={() => setDialog({ type: "edit", server })}
+                    onDefault={() => run(() => setDefaultServerAction(server.id))}
+                    onRevoke={() => setDialog({ type: "revoke", server })}
+                    onDelete={() => setDialog({ type: "delete", server })}
+                  />
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <Dialog open={dialog.type === "pair"} title="Добавить сервер" onClose={close}>
         {dialog.type === "pair" ? (
@@ -163,6 +200,11 @@ export function ServersView({
             onClose={close}
             onClaim={(input) =>
               new Promise((resolve) => {
+                if (demo) {
+                  setMessage(DEMO_UI_BLOCKED);
+                  resolve({ error: DEMO_UI_BLOCKED });
+                  return;
+                }
                 setMessage(null);
                 startTransition(async () => {
                   const result = await claimServerAction(input);
@@ -253,9 +295,282 @@ export function ServersView({
   );
 }
 
-function seenTitle(server: ServerRecord): string {
-  if (!server.lastSeenAt) return "Сообщений агента ещё не было";
-  return `Последняя связь ${formatDateTime(server.lastSeenAt)}`;
+function ServerRows({
+  server,
+  configCount,
+  open,
+  pending,
+  onToggle,
+  onStatus,
+  onEdit,
+  onDefault,
+  onRevoke,
+  onDelete,
+}: {
+  server: ServerRecord;
+  configCount: number;
+  open: boolean;
+  pending: boolean;
+  onToggle: () => void;
+  onStatus: () => void;
+  onEdit: () => void;
+  onDefault: () => void;
+  onRevoke: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <>
+      <tr className="border-b border-line/80 last:border-b-0">
+        <td className="px-2.5 py-2.5">
+          <span className="flex items-start gap-2.5">
+            <span className="mt-0.5">
+              <CountryFlag code={countryFlag(server.location, server.name)} />
+            </span>
+            <span>
+              <span className="block font-medium whitespace-nowrap text-ink">{server.name || "Нет данных"}</span>
+              <span className="mt-0.5 block text-[11px] whitespace-nowrap text-muted">
+                {server.location.trim() || "Нет данных"}
+              </span>
+              {server.isDefault ? (
+                <span className="mt-1 inline-flex rounded-full bg-info/15 px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap text-info">
+                  по умолчанию
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="mt-0.5 block text-xs whitespace-nowrap text-accent hover:text-ink"
+                aria-expanded={open}
+                onClick={onToggle}
+              >
+                {open ? "Скрыть" : "Подробнее"}
+              </button>
+            </span>
+          </span>
+        </td>
+        <td className="px-2.5 py-2.5 font-mono text-xs whitespace-nowrap tabular-nums text-ink">{shown(server.endpoint)}</td>
+        <td className="px-2.5 py-2.5 whitespace-nowrap">
+          <StatusBadge status={server.linkStatus} />
+        </td>
+        <td className="px-2.5 py-2.5 text-center font-medium tabular-nums text-ink">{configCount}</td>
+        <td className="px-2.5 py-2.5 whitespace-nowrap tabular-nums text-muted">{agentVersionLabel(server)}</td>
+        <td className="px-2.5 py-2.5 whitespace-nowrap tabular-nums text-muted">
+          {server.lastSeenAt ? formatDateTime(server.lastSeenAt) : "Нет данных"}
+        </td>
+        <td className="px-2.5 py-2.5 font-mono text-xs whitespace-nowrap tabular-nums text-ink">
+          {Number.isFinite(server.listenPort) ? `${server.listenPort} UDP` : "Нет данных"}
+        </td>
+        <td className="py-2.5 pr-2 pl-2.5 whitespace-nowrap">
+          <div className="flex flex-nowrap items-center justify-end gap-1">
+            <Button size="sm" variant="secondary" className="shrink-0 whitespace-nowrap" onClick={onStatus}>
+              Статус
+            </Button>
+            <Button size="sm" variant="secondary" className="shrink-0 whitespace-nowrap" onClick={onEdit}>
+              Изменить
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="shrink-0 whitespace-nowrap"
+              title="Сделать сервером по умолчанию"
+              disabled={server.isDefault || pending}
+              onClick={onDefault}
+            >
+              Основной
+            </Button>
+            {server.paired && !server.agentRevoked ? (
+              <Button size="sm" variant="danger" className="shrink-0 whitespace-nowrap" onClick={onRevoke}>
+                Отвязать
+              </Button>
+            ) : null}
+            <Button size="sm" variant="danger" className="shrink-0 whitespace-nowrap" onClick={onDelete}>
+              Удалить
+            </Button>
+          </div>
+        </td>
+      </tr>
+      {open ? (
+        <tr className="border-b border-line/80">
+          <td colSpan={8} className="px-3 py-3 md:px-4">
+            <dl className="grid gap-2 rounded-2xl border border-line bg-panel/70 p-3 sm:grid-cols-2 xl:grid-cols-4">
+              <Fact label="Название" value={shown(server.name)} />
+              <Fact label="Расположение" value={shown(server.location)} />
+              <Fact label="Endpoint" value={shown(server.endpoint)} mono />
+              <Fact label="WireGuard-порт" value={Number.isFinite(server.listenPort) ? `${server.listenPort} UDP` : "Нет данных"} mono />
+              <Fact label="VPN-подсеть" value={shown(server.vpnSubnet)} mono />
+              <Fact label="Версия агента" value={agentVersionLabel(server)} />
+              <Fact label="Последняя связь" value={server.lastSeenAt ? formatDateTime(server.lastSeenAt) : "Нет данных"} />
+              <Fact label="Агент привязан" value={server.paired ? "да" : "нет"} />
+              <Fact label="Агент отозван" value={server.agentRevoked ? "да" : "нет"} />
+              <Fact label="Внешний интерфейс" value={shown(server.externalInterface)} mono />
+              <Fact label="Публичный ключ WireGuard" value={shown(server.wgPublicKey)} mono />
+            </dl>
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+}
+
+function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="min-w-0 rounded-xl bg-inset px-3 py-2">
+      <dt className="text-[11px] text-muted">{label}</dt>
+      <dd className={mono ? "mt-1 font-mono text-sm break-all text-ink" : "mt-1 text-sm break-words text-ink"}>{value}</dd>
+    </div>
+  );
+}
+
+function agentVersionLabel(server: ServerRecord) {
+  if (!server.paired) return "Не привязан";
+  return server.agentVersion?.trim() || "Нет данных";
+}
+
+function shown(value: string | null | undefined) {
+  const trimmed = value?.trim() ?? "";
+  return trimmed ? trimmed : "Нет данных";
+}
+
+function filterServers(servers: ServerRecord[], query: string, status: StatusFilter) {
+  const needle = query.trim().toLowerCase();
+  return servers.filter((server) => {
+    if (status !== "all" && server.linkStatus !== status) return false;
+    if (!needle) return true;
+    return [server.name, server.location, server.endpoint].join(" ").toLowerCase().includes(needle);
+  });
+}
+
+function Kpi({ label, value, hint, icon }: { label: string; value: string; hint: string; icon: ReactNode }) {
+  return (
+    <article className="glass flex items-start gap-3 px-4 py-3.5 dark:shadow-[0_16px_36px_rgba(2,8,22,0.28),0_0_28px_color-mix(in_srgb,var(--accent)_18%,transparent)]">
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-line bg-accent/10 text-accent">
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-xs text-muted">{label}</span>
+        <span className="mt-1 block text-2xl font-semibold tracking-tight tabular-nums text-ink">{value}</span>
+        <span className="mt-1 block text-[11px] text-muted">{hint}</span>
+      </span>
+    </article>
+  );
+}
+
+function IconPulse() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+      <path d="M3 12h4l2-5 4 10 2-5h6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconOffline() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+      <circle cx="12" cy="12" r="7" />
+      <path d="M8 12h8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconLink() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+      <path d="M9 12h6M8 8H7a4 4 0 0 0 0 8h1M16 8h1a4 4 0 0 1 0 8h-1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CountryFlag({ code }: { code: CountryCode | null }) {
+  const graphic =
+    code === "NL" ? <FlagNl /> : code === "DE" ? <FlagDe /> : code === "US" ? <FlagUs /> : code === "SG" ? <FlagSg /> : <FlagGlobe />;
+  return <span className="grid h-5 w-5 shrink-0 place-items-center">{graphic}</span>;
+}
+
+function flagFrame(children: ReactNode) {
+  return (
+    <svg viewBox="0 0 60 40" className="h-[18px] w-5 overflow-hidden rounded-[3px] ring-1 ring-line" aria-hidden>
+      {children}
+    </svg>
+  );
+}
+
+function FlagNl() {
+  return flagFrame(
+    <>
+      <rect width="60" height="13.4" fill="#AE1C28" />
+      <rect y="13.3" width="60" height="13.4" fill="#FFFFFF" />
+      <rect y="26.6" width="60" height="13.4" fill="#21468B" />
+    </>,
+  );
+}
+
+function FlagDe() {
+  return flagFrame(
+    <>
+      <rect width="60" height="13.4" fill="#000000" />
+      <rect y="13.3" width="60" height="13.4" fill="#DD0000" />
+      <rect y="26.6" width="60" height="13.4" fill="#FFCE00" />
+    </>,
+  );
+}
+
+function FlagUs() {
+  return flagFrame(
+    <>
+      <rect width="60" height="40" fill="#BF0A30" />
+      <rect y="3.1" width="60" height="3.1" fill="#FFFFFF" />
+      <rect y="9.3" width="60" height="3.1" fill="#FFFFFF" />
+      <rect y="15.5" width="60" height="3.1" fill="#FFFFFF" />
+      <rect y="21.7" width="60" height="3.1" fill="#FFFFFF" />
+      <rect y="27.9" width="60" height="3.1" fill="#FFFFFF" />
+      <rect y="34.1" width="60" height="3.1" fill="#FFFFFF" />
+      <rect width="26" height="21.5" fill="#002868" />
+    </>,
+  );
+}
+
+function FlagSg() {
+  return flagFrame(
+    <>
+      <rect width="60" height="20" fill="#EF3340" />
+      <rect y="20" width="60" height="20" fill="#FFFFFF" />
+      <circle cx="16" cy="20" r="6" fill="#FFFFFF" />
+      <circle cx="18.2" cy="20" r="4.6" fill="#EF3340" />
+    </>,
+  );
+}
+
+function FlagGlobe() {
+  return (
+    <svg viewBox="0 0 20 20" className="h-5 w-5 text-accent" aria-hidden>
+      <circle cx="10" cy="10" r="7.2" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <ellipse cx="10" cy="10" rx="3.1" ry="7.2" fill="none" stroke="currentColor" strokeWidth="1" />
+      <path d="M2.8 10h14.4M4.2 6.4h11.6M4.2 13.6h11.6" fill="none" stroke="currentColor" strokeWidth="1" />
+    </svg>
+  );
+}
+
+const countryFlags: Record<string, CountryCode> = {
+  нидерланды: "NL",
+  netherlands: "NL",
+  holland: "NL",
+  амстердам: "NL",
+  германия: "DE",
+  germany: "DE",
+  франкфурт: "DE",
+  сша: "US",
+  usa: "US",
+  "united states": "US",
+  сингапур: "SG",
+  singapore: "SG",
+};
+
+const prefixFlags: Record<string, CountryCode> = { NL: "NL", DE: "DE", US: "US", SG: "SG" };
+
+function countryFlag(location: string | undefined, serverName: string): CountryCode | null {
+  const fromLocation = countryFlags[location?.trim().toLowerCase() ?? ""];
+  if (fromLocation) return fromLocation;
+  const prefix = /^([A-Za-z]{2})-/.exec(serverName.trim())?.[1]?.toUpperCase();
+  return (prefix && prefixFlags[prefix]) || null;
 }
 
 function StatusDetails({ server, onClose }: { server: ServerRecord; onClose: () => void }) {

@@ -90,9 +90,11 @@ function Mark({ compact = false }: { compact?: boolean }) {
 
 export function AppShell({
   summary,
+  demo = false,
   children,
 }: {
   summary: PanelSummary;
+  demo?: boolean;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -137,18 +139,15 @@ export function AppShell({
           </div>
           <div className="flex shrink-0 items-center gap-2 text-xs">
             <span className="hidden rounded-full bg-inset px-2.5 py-1 text-muted sm:inline">
-              {summary.serverCount} в базе
+              {demo
+                ? `Демо · ${summary.serverCount} ${serverWord(summary.serverCount)}`
+                : `${summary.serverCount} в базе`}
             </span>
             <span className="hidden rounded-full bg-inset px-2.5 py-1 text-muted md:inline">
               {summary.onlineCount > 0 ? `${summary.onlineCount} на связи` : "На связи нет"}
             </span>
           </div>
         </header>
-
-        <p className="px-1 text-xs leading-5 text-muted">
-          Статус сервера берётся из сообщений агента. Трафик и выпуск конфигураций
-          пока не собираются.
-        </p>
         {children}
       </div>
 
@@ -166,6 +165,15 @@ export function AppShell({
       </nav>
     </div>
   );
+}
+
+function serverWord(count: number) {
+  const mod100 = Math.abs(count) % 100;
+  const mod10 = mod100 % 10;
+  if (mod100 > 10 && mod100 < 20) return "серверов";
+  if (mod10 === 1) return "сервер";
+  if (mod10 >= 2 && mod10 <= 4) return "сервера";
+  return "серверов";
 }
 
 function Mountains({ className }: { className?: string }) {

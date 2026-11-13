@@ -16,16 +16,6 @@ import type { AuditEntry } from "@/lib/types";
 
 const idle: SettingsFormState = { error: null, saved: false };
 
-const systemRows = [
-  ["Хранение", "SQLite в локальном каталоге data, файл не попадает в Git"],
-  ["Администраторы", "Одна учётная запись, пароль хранится как хеш"],
-  ["Сессия", "Cookie HttpOnly, проверка на сервере"],
-  ["Агент", "Подключается исходящим запросом по коду привязки"],
-  ["Конфигурации", "Выпуск не реализован"],
-  ["Учётные записи VPN", "Не используются"],
-  ["Подписки и платежи", "Не используются"],
-] as const;
-
 const auditLabels: Record<string, string> = {
   "admin.setup": "Создан администратор",
   "admin.login": "Вход",
@@ -162,21 +152,6 @@ export function SettingsView({
         </div>
 
         <div className="flex flex-col gap-4">
-          <section className="glass overflow-hidden">
-            <SectionHeading>Система</SectionHeading>
-            <dl>
-              {systemRows.map(([label, value]) => (
-                <div
-                  key={label}
-                  className="grid gap-1 border-b border-line px-4 py-3 last:border-b-0 sm:grid-cols-[11rem_minmax(0,1fr)] sm:items-baseline"
-                >
-                  <dt className="text-sm text-muted">{label}</dt>
-                  <dd className="text-sm text-ink">{value}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-
           <section className="glass overflow-hidden">
             <SectionHeading>Журнал</SectionHeading>
             {audit.length === 0 ? (
