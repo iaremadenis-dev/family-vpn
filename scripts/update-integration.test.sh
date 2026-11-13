@@ -423,22 +423,26 @@ CERT_CI=/var/lib/family-vpn/certs-ci
 mkdir -p "$CERT_CI" "$ETC_DIR"
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout "$CERT_CI/privkey.pem" -out "$CERT_CI/fullchain.pem" \
-  -days 1 -subj '/CN=127.0.0.1' >/dev/null 2>&1 || on_fail "openssl test cert"
+  -days 1 -subj '/CN=127.0.0.1' \
+  -addext 'subjectAltName=IP:127.0.0.1' >/dev/null 2>&1 || on_fail "openssl test cert"
+chmod 644 "$CERT_CI/fullchain.pem"
 chmod 600 "$CERT_CI/privkey.pem"
+# :443 avoids hostname/SNI site matching; disable h3 to avoid quic buffer issues on GHA.
 cat >"$ETC_DIR/Caddyfile.ci-https" <<'EOF'
 {
 	auto_https off
 	admin off
+	servers {
+		protocols h1 h2
+	}
 }
-https://127.0.0.1 {
+:443 {
 	tls /certs/fullchain.pem /certs/privkey.pem
 	reverse_proxy panel:3000
 }
 EOF
 PANEL_NET=$(docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "$(docker ps -aq --filter name=family-vpn-panel | head -n 1)" | head -n 1)
 [ -n "$PANEL_NET" ] || on_fail "panel docker network missing"
-chmod 644 "$CERT_CI/fullchain.pem"
-chmod 600 "$CERT_CI/privkey.pem"
 docker rm -f family-vpn-caddy-ci >/dev/null 2>&1 || true
 # Match production compose: Caddy must run as root to read mode-600 privkey.pem.
 docker run -d --name family-vpn-caddy-ci --user 0:0 --network "$PANEL_NET" \
@@ -448,17 +452,17 @@ docker run -d --name family-vpn-caddy-ci --user 0:0 --network "$PANEL_NET" \
   caddy:2.10-alpine >/dev/null || on_fail "caddy ci container"
 HTTPS_OK=0
 for _ in $(seq 1 30); do
-  if curl -kfsS -o /dev/null --max-time 3 "https://127.0.0.1:8443/login"; then
+  if curl -kfsS --http1.1 -o /dev/null --max-time 3 "https://127.0.0.1:8443/login"; then
     HTTPS_OK=1
     break
   fi
   sleep 1
 done
 if [ "$HTTPS_OK" != "1" ]; then
-  docker logs family-vpn-caddy-ci 2>&1 | tail -n 40 || true
+  docker logs family-vpn-caddy-ci 2>&1 | tail -n 80 || true
   on_fail "https test-cert /login"
 fi
-HTTPS_CODE=$(curl -ksS -o /dev/null -w '%{http_code}' "https://127.0.0.1:8443/login")
+HTTPS_CODE=$(curl -ksS --http1.1 -o /dev/null -w '%{http_code}' "https://127.0.0.1:8443/login")
 [ "$HTTPS_CODE" = "200" ] || on_fail "https test-cert HTTP $HTTPS_CODE"
 docker rm -f family-vpn-caddy-ci >/dev/null 2>&1 || true
 note "HTTPS_TEST_CERT_OK port=8443 caddy=2.10-alpine"
