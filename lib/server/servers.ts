@@ -62,6 +62,7 @@ export async function createServer(input: ServerInput): Promise<ServerRecord> {
     wgPublicKey: null,
     vpnSubnet: null,
     externalInterface: null,
+    cpuPercent: null,
   };
 
   db.prepare(
@@ -209,6 +210,8 @@ function mapServer(row: Record<string, string | number | bigint | null | Uint8Ar
       row.external_interface === null || row.external_interface === undefined
         ? null
         : String(row.external_interface),
+    cpuPercent:
+      row.cpu_percent === null || row.cpu_percent === undefined ? null : Number(row.cpu_percent),
     linkStatus: deriveLinkStatus({
       paired,
       revoked,

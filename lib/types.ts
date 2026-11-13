@@ -20,6 +20,7 @@ export type ServerRecord = ServerInput & {
   wgPublicKey: string | null;
   vpnSubnet: string | null;
   externalInterface: string | null;
+  cpuPercent: number | null;
 };
 
 export type AuditEntry = {

@@ -167,9 +167,22 @@ func runLoop(args []string) int {
 	}
 	delay := time.Second
 	pendingResults := []JobResult(nil)
+	var previousCPU *cpuSample
 	for {
 		peers := collectPeerStats()
-		jobs, err := client.Heartbeat(ctx, localReport(), peers, pendingResults)
+		report := localReport()
+		if sample, err := readCPUSample(); err != nil {
+			previousCPU = nil
+		} else {
+			if previousCPU != nil {
+				if percent, ok := cpuPercent(*previousCPU, sample); ok {
+					report.CpuPercent = &percent
+				}
+			}
+			saved := sample
+			previousCPU = &saved
+		}
+		jobs, err := client.Heartbeat(ctx, report, peers, pendingResults)
 		if errors.Is(err, ErrRevoked) {
 			fmt.Fprintln(os.Stderr, "agent access revoked")
 			return 0

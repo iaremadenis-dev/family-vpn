@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 const globalForDb = globalThis as unknown as { familyVpnDb?: DatabaseSync };
 const migrated = new WeakSet<DatabaseSync>();
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export function dataDirectory(): string {
   const configured = process.env.FAMILY_VPN_DATA_DIR?.trim();
@@ -44,6 +44,7 @@ function migrate(db: DatabaseSync) {
   if (version >= SCHEMA_VERSION) {
     ensureAgentTables(db);
     ensureConfigTables(db);
+    ensureCpuColumn(db);
     return;
   }
 
@@ -61,6 +62,7 @@ function migrate(db: DatabaseSync) {
       db.exec(configSchema);
       db.exec(upgradeServersForConfigs);
     }
+    if (version < 4) ensureCpuColumn(db);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec("COMMIT");
   } catch (cause) {
@@ -85,6 +87,13 @@ function ensureConfigTables(db: DatabaseSync) {
     .prepare("SELECT 1 AS ok FROM pragma_table_info('servers') WHERE name = 'used_vpn_ips_json'")
     .get();
   if (!column) db.exec(upgradeServersForConfigs);
+}
+
+function ensureCpuColumn(db: DatabaseSync) {
+  const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'servers'").get();
+  if (!table) return;
+  const column = db.prepare("SELECT 1 AS ok FROM pragma_table_info('servers') WHERE name = 'cpu_percent'").get();
+  if (!column) db.exec("ALTER TABLE servers ADD COLUMN cpu_percent INTEGER");
 }
 
 const baseSchema = `
@@ -113,7 +122,8 @@ const baseSchema = `
       external_interface TEXT,
       agent_version TEXT,
       last_seen_at TEXT,
-      wg_up INTEGER
+      wg_up INTEGER,
+      cpu_percent INTEGER
     );
     CREATE UNIQUE INDEX servers_endpoint_port ON servers (endpoint, listen_port);
     CREATE TABLE audit_log (

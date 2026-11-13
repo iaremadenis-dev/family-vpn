@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const agentVersion = "0.4.0"
+const agentVersion = "0.4.1"
 
 var (
 	ErrRevoked = errors.New("agent access revoked")
@@ -32,6 +32,7 @@ type Report struct {
 	InterfaceUp       bool   `json:"interfaceUp"`
 	ExternalInterface string `json:"externalInterface"`
 	ExistingConfig    bool   `json:"existingConfig"`
+	CpuPercent        *int   `json:"cpuPercent,omitempty"`
 }
 
 type Client struct {

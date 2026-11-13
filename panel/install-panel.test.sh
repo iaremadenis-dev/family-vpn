@@ -220,6 +220,14 @@ grep -q 'PASSWORD_IN_TERMINAL' "$out/ship"
 grep -q 'SHIP git-archive' "$out/ship"
 grep -q 'SHIP releases' "$out/ship"
 grep -q -- '--new' "$out/ship"
+bash "$ROOT/panel/install-from-pc.sh" --update --dry-run --host root@203.0.113.5 >"$out/ship-update"
+grep -q 'SHIP git-archive' "$out/ship-update"
+grep -q 'SHIP releases' "$out/ship-update"
+grep -q '/opt/family-vpn/app/panel/install-panel.sh --update' "$out/ship-update"
+if grep -q -- '--new' "$out/ship-update"; then
+  echo "panel update command must not reinstall" >&2
+  exit 1
+fi
 grep -q '../releases:/app/releases:ro' "$ROOT/panel/docker-compose.yml"
 grep -q 'fetch-agent-release.ps1' "$ROOT/panel/install-from-pc.sh"
 grep -q 'ControlMaster=no' "$ROOT/panel/install-from-pc.sh"
@@ -259,6 +267,145 @@ rm -f "$ident" "$archive_file"
 rm -rf "$token_dir" "$admin_dir" "$owner_bin"
 rm -f "$owner_log"
 
+update_root=$(mktemp -d)
+update_state="$update_root/state"
+update_backup="$update_root/backups"
+update_env="$update_root/panel.env"
+update_pub="$update_root/backup.pub"
+mkdir -p "$update_state"
+printf 'PUBLIC_URL=https://203.0.113.5\n' >"$update_env"
+printf 'age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p\n' >"$update_pub"
+if command -v python3 >/dev/null 2>&1; then
+  UPDATE_PY=python3
+elif command -v python >/dev/null 2>&1; then
+  UPDATE_PY=python
+else
+  echo "python is required for the panel update fixture" >&2
+  exit 1
+fi
+"$UPDATE_PY" -c 'import sqlite3,sys
+connection = sqlite3.connect(sys.argv[1])
+connection.execute("create table admin (id integer primary key, display_name text, password_hash text, created_at text)")
+connection.execute("insert into admin values (1, \"Ada\", \"scrypt-hash\", \"t0\")")
+connection.execute("create table servers (id text primary key, endpoint text, listen_port integer)")
+connection.execute("insert into servers values (\"nl\", \"203.0.113.10\", 51820)")
+connection.execute("PRAGMA user_version = 3")
+connection.commit()' "$update_state/family-vpn.sqlite"
+"$UPDATE_PY" -c 'import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b"k"*32)' "$update_state/master.key"
+sqlite_before=$("$UPDATE_PY" -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_bytes().hex())' "$update_state/family-vpn.sqlite")
+key_before=$("$UPDATE_PY" -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_bytes().hex())' "$update_state/master.key")
+
+empty_state=$(mktemp -d)
+set +e
+FAMILY_VPN_PANEL_DIR="$empty_state" FAMILY_VPN_UPDATE_TEST=1 bash "$INSTALL" --update >"$out/update-empty" 2>"$out/update-empty.err"
+empty_code=$?
+set -e
+[ "$empty_code" -ne 0 ]
+grep -q 'SQLITE_MISSING' "$out/update-empty.err"
+test ! -e "$empty_state/family-vpn.sqlite"
+
+set +e
+FAMILY_VPN_PANEL_DIR="$update_state" FAMILY_VPN_UPDATE_TEST=1 bash "$INSTALL" --update --dry-run \
+  >"$out/update-dry" 2>"$out/update-dry.err"
+dry_code=$?
+set -e
+[ "$dry_code" -eq 0 ]
+grep -q 'UPDATE_DRY_RUN' "$out/update-dry"
+dry_after=$("$UPDATE_PY" -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_bytes().hex())' "$update_state/family-vpn.sqlite")
+[ "$dry_after" = "$sqlite_before" ]
+test ! -d "$update_backup"
+
+cat >"$update_root/compose-ok" <<'EOF'
+#!/bin/bash
+printf '%s %s\n' "${FAMILY_VPN_UPDATE_PHASE:-}" "${FAMILY_VPN_PREVIOUS_IMAGE:-}" >>"$FAMILY_VPN_COMPOSE_LOG"
+exit 0
+EOF
+compose_log="$update_root/compose.log"
+: >"$compose_log"
+FAMILY_VPN_PANEL_DIR="$update_state" \
+  FAMILY_VPN_PANEL_ENV="$update_env" \
+  FAMILY_VPN_BACKUP_PUB="$update_pub" \
+  FAMILY_VPN_PREUPDATE_DIR="$update_backup" \
+  FAMILY_VPN_UPDATE_TEST=1 \
+  FAMILY_VPN_UPDATE_COMPOSE="$update_root/compose-ok" \
+  FAMILY_VPN_COMPOSE_LOG="$compose_log" \
+  FAMILY_VPN_UPDATE_IMAGE_BEFORE="sha256:previous" \
+  bash "$INSTALL" --update >"$out/update-ok"
+grep -q 'UPDATE_OK' "$out/update-ok"
+grep -q 'apply sha256:previous' "$compose_log"
+ok_after=$("$UPDATE_PY" -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_bytes().hex())' "$update_state/family-vpn.sqlite")
+[ "$ok_after" = "$sqlite_before" ]
+key_after=$("$UPDATE_PY" -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_bytes().hex())' "$update_state/master.key")
+[ "$key_after" = "$key_before" ]
+env_hash_before=$("$UPDATE_PY" -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_bytes().hex())' "$update_env")
+snapshot=$(find "$update_backup" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+test -n "$snapshot"
+test -f "$snapshot/SHA256SUMS"
+( cd "$snapshot" && sha256sum -c SHA256SUMS >/dev/null )
+if command -v cygpath >/dev/null 2>&1; then
+  tool_path=$(cygpath -w "$ROOT/panel/archive-tool.mjs")
+  snapshot_path=$(cygpath -w "$snapshot")
+else
+  tool_path="$ROOT/panel/archive-tool.mjs"
+  snapshot_path=$snapshot
+fi
+node "$tool_path" verify "$snapshot_path" >"$out/snapshot-verify"
+grep -q 'schema=3' "$out/snapshot-verify"
+
+cat >"$update_root/compose-fail" <<'EOF'
+#!/bin/bash
+printf '%s %s\n' "${FAMILY_VPN_UPDATE_PHASE:-}" "${FAMILY_VPN_PREVIOUS_IMAGE:-}" >>"$FAMILY_VPN_COMPOSE_LOG"
+if [ "${FAMILY_VPN_UPDATE_PHASE:-}" = "rollback" ]; then
+  exit 0
+fi
+rm -f "$FAMILY_VPN_PANEL_DIR/family-vpn.sqlite" "$FAMILY_VPN_PANEL_ENV"
+printf 'empty\n' >"$FAMILY_VPN_PANEL_DIR/family-vpn.sqlite"
+exit 1
+EOF
+fail_log="$update_root/compose-fail.log"
+: >"$fail_log"
+set +e
+FAMILY_VPN_PANEL_DIR="$update_state" \
+  FAMILY_VPN_PANEL_ENV="$update_env" \
+  FAMILY_VPN_BACKUP_PUB="$update_pub" \
+  FAMILY_VPN_PREUPDATE_DIR="$update_backup" \
+  FAMILY_VPN_UPDATE_TEST=1 \
+  FAMILY_VPN_UPDATE_COMPOSE="$update_root/compose-fail" \
+  FAMILY_VPN_COMPOSE_LOG="$fail_log" \
+  bash "$INSTALL" --update >"$out/update-fail" 2>"$out/update-fail.err"
+fail_code=$?
+set -e
+[ "$fail_code" -ne 0 ]
+grep -q 'UPDATE_ROLLBACK' "$out/update-fail.err"
+grep -q 'PANEL_RESTORED' "$out/update-fail"
+grep -q 'rollback previous-image' "$fail_log"
+restored=$("$UPDATE_PY" -c 'import sqlite3,sys
+connection = sqlite3.connect(sys.argv[1])
+row = connection.execute("select display_name from admin where id = 1").fetchone()
+print(row[0])' "$update_state/family-vpn.sqlite")
+[ "$restored" = "Ada" ]
+test -f "$update_env"
+env_hash_after=$("$UPDATE_PY" -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_bytes().hex())' "$update_env")
+[ "$env_hash_after" = "$env_hash_before" ]
+
+set +e
+FAMILY_VPN_PANEL_DIR="$update_state" \
+  FAMILY_VPN_PREUPDATE_DIR="$update_backup" \
+  FAMILY_VPN_UPDATE_TEST=1 \
+  bash "$INSTALL" --rollback --dry-run >"$out/rollback-dry" 2>"$out/rollback-dry.err"
+rollback_dry=$?
+set -e
+[ "$rollback_dry" -eq 0 ]
+grep -q 'ROLLBACK_DRY_RUN' "$out/rollback-dry"
+dry_admin=$("$UPDATE_PY" -c 'import sqlite3,sys
+connection = sqlite3.connect(sys.argv[1])
+print(connection.execute("select display_name from admin where id = 1").fetchone()[0])' "$update_state/family-vpn.sqlite")
+[ "$dry_admin" = "Ada" ]
+
+grep -q '/var/lib/family-vpn/panel:/data' "$ROOT/panel/docker-compose.yml"
+grep -q 'compose up -d --build --no-deps panel' "$INSTALL"
+
+rm -rf "$update_root" "$empty_state"
 rm -rf "$data" "$empty" "$out"
 
 echo "panel installer checks ok"

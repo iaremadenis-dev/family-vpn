@@ -38,6 +38,7 @@ export type AgentReport = {
   interfaceUp: boolean;
   externalInterface: string;
   existingConfig: boolean;
+  cpuPercent?: unknown;
 };
 
 export type LinkFacts = {
@@ -307,6 +308,7 @@ export function heartbeatAgent(
     throw new UserError("Нет учётных данных агента.", 401);
   }
   const version = assertVersion(input.version);
+  const cpuPercent = readCpuPercent(input.report);
   const report = assertReport(input.report);
   const row = getDb()
     .prepare("SELECT server_id, revoked_at FROM agents WHERE token_hash = ?")
@@ -322,7 +324,8 @@ export function heartbeatAgent(
   db.prepare(
     `UPDATE servers
      SET endpoint = ?, listen_port = ?, wg_public_key = ?, vpn_subnet = ?,
-         external_interface = ?, agent_version = ?, last_seen_at = ?, wg_up = ?, updated_at = ?
+         external_interface = ?, agent_version = ?, last_seen_at = ?, wg_up = ?,
+         cpu_percent = ?, updated_at = ?
      WHERE id = ?`,
   ).run(
     report.endpoint,
@@ -333,6 +336,7 @@ export function heartbeatAgent(
     version,
     now,
     report.interfaceUp ? 1 : 0,
+    cpuPercent,
     now,
     serverId,
   );
@@ -356,6 +360,13 @@ export function revokeAgent(serverId: string) {
     )
     .run(new Date().toISOString(), randomBytes(32).toString("hex"), serverId);
   requestBackup("agent");
+}
+
+export function readCpuPercent(report: { cpuPercent?: unknown } | null | undefined): number | null {
+  if (!report || report.cpuPercent == null) return null;
+  const value = report.cpuPercent;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 100) return null;
+  return value;
 }
 
 function assertReport(input: AgentReport): AgentReport {

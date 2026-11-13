@@ -260,4 +260,106 @@ describe("pairing", { concurrency: 1 }, () => {
       /Слишком много попыток/,
     );
   });
+
+  test("agent 0.4.0 heartbeat is accepted and stores no cpu", () => {
+    reset();
+    const paired = pairServer();
+    const result = heartbeatAgent(paired.token, { version: "0.4.0", report }, subject);
+    assert.equal(result.ok, true);
+    const row = getDb().prepare("SELECT cpu_percent, agent_version FROM servers WHERE id = ?").get(paired.serverId);
+    assert.equal(row?.cpu_percent, null);
+    assert.equal(row?.agent_version, "0.4.0");
+  });
+
+  test("agent 0.4.1 heartbeat stores cpu and a later 0.4.0 heartbeat clears it", () => {
+    reset();
+    const paired = pairServer();
+    heartbeatAgent(paired.token, { version: "0.4.1", report: { ...report, cpuPercent: 18 } }, subject);
+    assert.equal(cpuOf(paired.serverId), 18);
+
+    for (const invalid of [101, -1, 18.5, "18"]) {
+      heartbeatAgent(
+        paired.token,
+        { version: "0.4.1", report: { ...report, cpuPercent: invalid } },
+        subject,
+      );
+      assert.equal(cpuOf(paired.serverId), null);
+    }
+
+    heartbeatAgent(paired.token, { version: "0.4.1", report: { ...report, cpuPercent: 34 } }, subject);
+    assert.equal(cpuOf(paired.serverId), 34);
+    heartbeatAgent(paired.token, { version: "0.4.0", report }, subject);
+    assert.equal(cpuOf(paired.serverId), null);
+    assert.equal(
+      getDb().prepare("SELECT agent_version FROM servers WHERE id = ?").get(paired.serverId)?.agent_version,
+      "0.4.0",
+    );
+  });
+
+  test("cpu telemetry does not change peer stats or peer jobs", () => {
+    reset();
+    const paired = pairServer();
+    const configId = "44444444-4444-4444-8444-444444444444";
+    const jobId = "55555555-5555-4555-8555-555555555555";
+    const clientPub = `${"E".repeat(43)}=`;
+    const now = new Date().toISOString();
+    getDb()
+      .prepare(
+        `INSERT INTO configs
+          (id, server_id, device_name, client_public_key, client_private_key_enc, vpn_ip,
+           status, created_at, updated_at)
+         VALUES (?, ?, 'phone', ?, 'enc', '10.200.0.4', 'pending', ?, ?)`,
+      )
+      .run(configId, paired.serverId, clientPub, now, now);
+    getDb()
+      .prepare(
+        `INSERT INTO agent_jobs
+          (id, server_id, config_id, type, public_key, allowed_ips, status, attempts, created_at, updated_at)
+         VALUES (?, ?, ?, 'add_peer', ?, '10.200.0.4/32', 'queued', 0, ?, ?)`,
+      )
+      .run(jobId, paired.serverId, configId, clientPub, now, now);
+
+    const result = heartbeatAgent(
+      paired.token,
+      {
+        version: "0.4.1",
+        report: { ...report, cpuPercent: 22 },
+        peers: [
+          {
+            publicKey: clientPub,
+            allowedIps: "10.200.0.4/32",
+            rxBytes: 3000,
+            txBytes: 4000,
+            lastHandshake: 1_700_000_000,
+          },
+        ],
+      },
+      subject,
+    );
+    assert.equal(result.jobs[0]?.type, "add_peer");
+    assert.equal(result.jobs[0]?.publicKey, clientPub);
+    const stats = getDb().prepare("SELECT rx_bytes, tx_bytes, status FROM configs WHERE id = ?").get(configId);
+    assert.equal(Number(stats?.rx_bytes), 3000);
+    assert.equal(Number(stats?.tx_bytes), 4000);
+    assert.equal(stats?.status, "pending");
+    assert.equal(cpuOf(paired.serverId), 22);
+  });
 });
+
+function pairServer() {
+  const code = generatePairingCode();
+  const enrolled = enroll(code);
+  const claimed = claimPairingCode({
+    name: "NL-01",
+    location: "Amsterdam",
+    code,
+    subjectHash: subject,
+  });
+  const paired = poll(enrolled.enrollmentId, enrolled.nonce);
+  return { serverId: claimed.serverId, token: paired.token ?? "" };
+}
+
+function cpuOf(serverId: string): number | null {
+  const row = getDb().prepare("SELECT cpu_percent FROM servers WHERE id = ?").get(serverId);
+  return row?.cpu_percent == null ? null : Number(row.cpu_percent);
+}

@@ -24,6 +24,7 @@ die() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --new) MODE=new; shift ;;
+    --update) MODE=update; shift ;;
     --restore) MODE=restore; shift ;;
     --host) HOST=${2:-}; shift 2 ;;
     --email) EMAIL=${2:-}; shift 2 ;;
@@ -39,12 +40,16 @@ done
 
 [ -n "$MODE" ] || MODE=new
 [ -n "$HOST" ] || die "укажите --host root@IP"
-[ -n "$EMAIL" ] || die "укажите --email"
-[[ "$EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || die "адрес --email выглядит неверно"
+if [ "$MODE" = "new" ] || [ "$MODE" = "restore" ]; then
+  [ -n "$EMAIL" ] || die "укажите --email"
+  [[ "$EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || die "адрес --email выглядит неверно"
+fi
 if [ "$MODE" = "new" ]; then
   [ -n "$PUBKEY" ] || die "укажите --backup-pubkey"
   printf '%s' "$PUBKEY" | grep -q 'AGE-SECRET-KEY-' && die "PRIVATE_KEY_REFUSED"
   [[ "$PUBKEY" =~ ^age1[0-9a-z]+$ ]] || die "PUBKEY_INVALID"
+elif [ "$MODE" = "update" ]; then
+  :
 elif [ "$MODE" = "restore" ]; then
   [ -n "$ARCHIVE" ] || die "укажите --archive"
   [ -f "$ARCHIVE" ] || die "ARCHIVE_MISSING"
@@ -52,7 +57,7 @@ elif [ "$MODE" = "restore" ]; then
   [ -f "$IDENTITY" ] || die "IDENTITY_MISSING"
   grep -q 'AGE-SECRET-KEY-' "$IDENTITY" || die "IDENTITY_INVALID"
 else
-  die "укажите --new или --restore"
+  die "укажите --new, --update или --restore"
 fi
 case "$HOST" in
   *@*) ;;
@@ -64,6 +69,8 @@ grep -q '^https://__PANEL_IP__ {$' "$ROOT/panel/Caddyfile.https" || die "сай�
 
 if [ "$MODE" = "new" ]; then
   remote=(bash /opt/family-vpn/app/panel/install-panel.sh --new --email "$EMAIL" --backup-pubkey "$PUBKEY")
+elif [ "$MODE" = "update" ]; then
+  remote=(bash /opt/family-vpn/app/panel/install-panel.sh --update)
 else
   remote=(bash /opt/family-vpn/app/panel/install-panel.sh --restore - --decrypted --backup-pubkey "$PUBKEY" --email "$EMAIL")
 fi
@@ -81,7 +88,7 @@ printf -v remote_text '%q ' "${remote[@]}"
 if [ "$DRY" -eq 1 ]; then
   printf 'PASSWORD_IN_TERMINAL\n'
   printf 'SHIP git-archive\n'
-  if [ "$MODE" = "new" ]; then
+  if [ "$MODE" = "new" ] || [ "$MODE" = "update" ]; then
     printf 'SHIP releases\n'
   fi
   if [ "$MODE" = "restore" ]; then
@@ -122,10 +129,10 @@ ssh_opts=(
 
 ssh "${ssh_opts[@]}" "$HOST" "mkdir -p /opt/family-vpn/app"
 ssh "${ssh_opts[@]}" "$HOST" "tar -x -C /opt/family-vpn/app" <"$archive"
-if [ "$MODE" = "new" ]; then
+if [ "$MODE" = "new" ] || [ "$MODE" = "update" ]; then
   release_names=(family-vpn-agent-linux-amd64 install.sh SHA256SUMS INSTALL.txt bootstrap.sh)
   for name in "${release_names[@]}"; do
-    [ -f "$ROOT/releases/$name" ] || die "нет releases/$name. Сначала: powershell -File scripts/fetch-agent-release.ps1"
+    [ -f "$ROOT/releases/$name" ] || die "нет releases/$name. Сначала scripts/build-release.sh. Опубликованный агент 0.4.0 по-прежнему скачивается через scripts/fetch-agent-release.ps1."
   done
   ssh "${ssh_opts[@]}" "$HOST" "mkdir -p /opt/family-vpn/app/releases"
   tar -C "$ROOT/releases" -cf - "${release_names[@]}" | ssh "${ssh_opts[@]}" "$HOST" "tar -x -C /opt/family-vpn/app/releases"

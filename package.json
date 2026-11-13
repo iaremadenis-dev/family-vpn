@@ -11,7 +11,9 @@
     "test:configs": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/wireguard.test.ts lib/server/configs.test.ts",
     "test:install-command": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/install-command.test.ts",
     "test:backup": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/backup-restore.test.ts",
-    "test": "npm run test:pairing && npm run test:configs && npm run test:install-command && npm run test:backup",
+    "test:cpu": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/cpu-migrate.test.ts lib/cpu-display.test.ts lib/wireguard-speed.test.ts",
+    "test:schema": "node --experimental-strip-types --import ./scripts/register-alias.mjs --test lib/server/schema-compat.test.ts lib/server/wal-snapshot.test.ts lib/demo-ui.test.ts",
+    "test": "npm run test:pairing && npm run test:configs && npm run test:install-command && npm run test:backup && npm run test:cpu && npm run test:schema",
     "test:production": "bash scripts/verify-production-ready.sh",
     "release:agent": "bash scripts/build-release.sh"
   },

@@ -1,15 +1,15 @@
 #!/bin/bash
-# Family VPN installer 0.4.0
+# Family VPN installer 0.4.1
 # Downloads the agent only from the panel origin and verifies SHA-256 before install.
 # Plain HTTP is accepted only for 127.0.0.1 and localhost (SSH tunnel).
 # A remote panel must use HTTPS. This script does not pipe an unverified
 # remote script into a privileged shell by itself.
-# 0.4.0 adds WireGuard peer jobs via heartbeat; existing wg0.conf peers are preserved.
+# --update replaces only the agent binary. It does not restart wg0 or edit peers.
 set -euo pipefail
 umask 077
 
 # Must not be named VERSION: sourcing /etc/os-release overwrites VERSION with Ubuntu's field.
-AGENT_VERSION="0.4.0"
+AGENT_VERSION="0.4.1"
 BACKEND=""
 BINARY=""
 SHA256=""
@@ -26,6 +26,8 @@ BACKUP_DIR=""
 WG_FILE=""
 AGENT_BIN="/usr/local/bin/family-vpn-agent"
 AGENT_BACKUP=""
+WG_CONF=${FAMILY_VPN_WG_CONF:-/etc/wireguard/wg0.conf}
+AGENT_UNIT=${FAMILY_VPN_AGENT_UNIT:-/etc/systemd/system/family-vpn-agent.service}
 
 die() {
   echo "family-vpn-install: $*" >&2
@@ -43,7 +45,7 @@ cleanup() {
   if [ "$status" -ne 0 ] && [ "$CREATED_WG" -eq 1 ] && [ ! -f "$DATA_DIR/wg-managed-by-installer" ]; then
     systemctl disable --now wg-quick@wg0 >/dev/null 2>&1 || true
     wg-quick down wg0 >/dev/null 2>&1 || true
-    rm -f /etc/wireguard/wg0.conf
+    rm -f "$WG_CONF"
     echo "family-vpn-install: incomplete new WireGuard config removed" >&2
   fi
 }
@@ -244,13 +246,13 @@ download_release() {
 }
 
 backup_wireguard() {
-  [ -f /etc/wireguard/wg0.conf ] || return 0
+  [ -f "$WG_CONF" ] || return 0
   BACKUP_DIR="$DATA_DIR/backups"
   install -d -m 700 "$BACKUP_DIR"
   local stamp dest
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   dest="$BACKUP_DIR/wg0.conf.$stamp"
-  install -m 600 /etc/wireguard/wg0.conf "$dest"
+  install -m 600 "$WG_CONF" "$dest"
   if command -v wg >/dev/null; then
     wg show wg0 > "$BACKUP_DIR/wg0.show.$stamp" 2>/dev/null || true
     chmod 600 "$BACKUP_DIR/wg0.show.$stamp" 2>/dev/null || true
@@ -259,7 +261,7 @@ backup_wireguard() {
 }
 
 write_agent_unit() {
-  cat > /etc/systemd/system/family-vpn-agent.service <<EOF
+  cat > "$AGENT_UNIT" <<EOF
 [Unit]
 Description=Family VPN Agent
 After=network-online.target wg-quick@wg0.service
@@ -287,7 +289,7 @@ agent_is_paired() {
 assert_paired_state() {
   [ -f "$AGENT_BIN" ] || die "current agent binary not found; use install, not --update"
   agent_is_paired || die "agent is not paired; refuse --update (no re-pair in update mode)"
-  [ -f /etc/wireguard/wg0.conf ] || die "wg0.conf missing; refuse update that could alter networking assumptions"
+  [ -f "$WG_CONF" ] || die "wg0.conf missing; refuse update that could alter networking assumptions"
 }
 
 # Pick a /24 in 10.200–10.250 that is not already used by a local route or address.
@@ -324,7 +326,7 @@ post_install_check() {
   local version
   version=$("$AGENT_BIN" --version 2>/dev/null | head -n 1 | tr -d '\r')
   [ "$version" = "$AGENT_VERSION" ] || die "agent version mismatch after install"
-  if [ -f /etc/wireguard/wg0.conf ]; then
+  if [ -f "$WG_CONF" ]; then
     if command -v wg >/dev/null; then
       wg show wg0 >/dev/null 2>&1 || die "wg0 is not up after install"
     fi
@@ -390,7 +392,7 @@ update_paired_agent() {
   backup_agent_binary
 
   local wg_before state_before
-  wg_before=$(sha256sum /etc/wireguard/wg0.conf | awk '{print $1}')
+  wg_before=$(sha256sum "$WG_CONF" | awk '{print $1}')
   state_before=$(sha256sum "$DATA_DIR/agent.json" | awk '{print $1}')
 
   echo "family-vpn-install: updating paired agent in place (no enroll, wg0 untouched)"
@@ -428,7 +430,7 @@ update_paired_agent() {
   fi
 
   local wg_after state_after
-  wg_after=$(sha256sum /etc/wireguard/wg0.conf | awk '{print $1}')
+  wg_after=$(sha256sum "$WG_CONF" | awk '{print $1}')
   state_after=$(sha256sum "$DATA_DIR/agent.json" | awk '{print $1}')
   [ "$wg_before" = "$wg_after" ] || die "wg0.conf changed during update; unexpected"
   [ "$state_before" = "$state_after" ] || die "agent.json changed during update; unexpected"
@@ -444,7 +446,7 @@ preflight() {
   assert_ubuntu_2404
   require_cmd ip
   require_cmd sha256sum
-  if [ -f /etc/wireguard/wg0.conf ]; then
+  if [ -f "$WG_CONF" ]; then
     echo "family-vpn-install: existing wg0.conf will be left unchanged"
     if command -v wg >/dev/null && wg show wg0 >/dev/null 2>&1; then
       echo "family-vpn-install: wg0 is present"
@@ -462,6 +464,10 @@ preflight() {
   fi
   echo "family-vpn-install $AGENT_VERSION preflight ok"
 }
+
+if [ "${FAMILY_VPN_INSTALL_LIB:-}" = "1" ] && [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -578,8 +584,8 @@ install -m 755 "$BINARY" "$AGENT_BIN"
 installed=$(sha256sum "$AGENT_BIN" | awk '{print $1}')
 [ "$installed" = "$SHA256" ] || die "installed agent checksum mismatch"
 
-if [ "$(wg_plan /etc/wireguard/wg0.conf)" = "preserve" ]; then
-  describe_wg_conf /etc/wireguard/wg0.conf
+if [ "$(wg_plan "$WG_CONF")" = "preserve" ]; then
+  describe_wg_conf "$WG_CONF"
   echo "family-vpn-install: existing wg0 left unchanged"
   echo "family-vpn-install: server key, peers, listen port, subnet, and network rules were not modified"
 else
@@ -602,7 +608,7 @@ else
   chmod 600 "$tmp/private"
   umask 077
   CREATED_WG=1
-  cat > /etc/wireguard/wg0.conf <<EOF
+  cat > "$WG_CONF" <<EOF
 [Interface]
 Address = $address
 ListenPort = $PORT
@@ -614,7 +620,7 @@ PostDown = iptables -D FORWARD -i wg0 -j ACCEPT || true
 PostDown = iptables -D FORWARD -o wg0 -j ACCEPT || true
 PostDown = iptables -t nat -D POSTROUTING -s $network -o $iface -j MASQUERADE || true
 EOF
-  chmod 600 /etc/wireguard/wg0.conf
+  chmod 600 "$WG_CONF"
   rm -rf "$tmp"
   TMP_KEYS=""
   printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-family-vpn.conf

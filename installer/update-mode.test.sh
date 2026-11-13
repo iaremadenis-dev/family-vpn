@@ -67,4 +67,24 @@ VERSION="0.4.0"
   exit 1
 }
 
+installer_version=$(sed -n 's/^AGENT_VERSION="\([^"]*\)"/\1/p' "$INSTALL")
+go_version=$(sed -n 's/^const agentVersion = "\([^"]*\)"/\1/p' "$ROOT/agent/protocol.go")
+[ "$installer_version" = "0.4.1" ] || {
+  echo "installer AGENT_VERSION must be 0.4.1, got $installer_version" >&2
+  exit 1
+}
+[ "$installer_version" = "$go_version" ] || {
+  echo "installer AGENT_VERSION $installer_version does not match agent $go_version" >&2
+  exit 1
+}
+
+update_body=$(sed -n '/^update_paired_agent()/,/^preflight()/p' "$INSTALL")
+if printf '%s\n' "$update_body" | grep -E 'wg-quick|ufw |iptables|nft |ssh '; then
+  echo "agent --update touches WireGuard, firewall, or SSH" >&2
+  exit 1
+fi
+printf '%s\n' "$update_body" | grep -q 'systemctl stop family-vpn-agent'
+printf '%s\n' "$update_body" | grep -q 'rollback_agent_binary'
+printf '%s\n' "$update_body" | grep -q 'agent.json'
+
 echo "update-mode checks ok"

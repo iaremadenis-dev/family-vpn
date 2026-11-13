@@ -163,6 +163,7 @@ function server(input: {
     wgPublicKey: null,
     vpnSubnet: null,
     externalInterface: null,
+    cpuPercent: null,
   };
 }
 

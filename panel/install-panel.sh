@@ -16,7 +16,8 @@ ACME_DIR=/var/lib/family-vpn/acme
 ETC_DIR=/etc/family-vpn
 BIN_DIR=/opt/family-vpn/bin
 CERTBOT=${FAMILY_VPN_CERTBOT:-/opt/family-vpn/certbot/bin/certbot}
-ENV_FILE="$ETC_DIR/panel.env"
+ENV_FILE=${FAMILY_VPN_PANEL_ENV:-$ETC_DIR/panel.env}
+PREUPDATE_DIR=${FAMILY_VPN_PREUPDATE_DIR:-/var/lib/family-vpn/backups/panel-pre-update}
 CADDYFILE="$ETC_DIR/Caddyfile"
 COMPOSE_FILE="$PANEL_DIR/docker-compose.yml"
 LOG_FILE=/var/log/family-vpn-install.log
@@ -32,6 +33,7 @@ BACKUP_PUBKEY=""
 BACKUP_PUBKEY_FILE=""
 IDENTITY=""
 AGE_KEYGEN=${FAMILY_VPN_AGE_KEYGEN:-age-keygen}
+NODE=${FAMILY_VPN_NODE:-node}
 if [ -n "${FAMILY_VPN_PYTHON:-}" ]; then
   PYTHON=$FAMILY_VPN_PYTHON
 elif command -v python3 >/dev/null 2>&1; then
@@ -57,12 +59,16 @@ usage() {
   cat <<'EOF'
 usage:
   install-panel.sh --new --email admin@example.com --backup-pubkey age1... [--ip A.B.C.D] [--staging] [--dry-run]
+  install-panel.sh --update [--dry-run]
+  install-panel.sh --rollback [--dry-run]
   install-panel.sh --restore - --decrypted --backup-pubkey age1... --email admin@example.com [--ip A.B.C.D]
   install-panel.sh --restore <archive> --identity <age-key> --email admin@example.com [--ip A.B.C.D]
   install-panel.sh --setup-token
   install-panel.sh --check
 
 --new prints a one-time activation code after HTTPS checks succeed. It does not accept an administrator password.
+--update rebuilds the panel container on the existing data directory. It refuses to run when SQLite or master.key is missing, so it cannot create an empty database. A verified snapshot is taken first.
+--rollback restores the newest pre-update snapshot and the recorded image id.
 --restore keeps the administrator from the archive and issues a certificate for this IP.
 --setup-token replaces the activation code when the first administrator does not exist yet. It does not delete SQLite.
 The age private key is read from a file and removed from this host after a successful restore.
@@ -767,6 +773,215 @@ cmd_restore() {
   fi
 }
 
+to_host_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+    return 0
+  fi
+  printf '%s\n' "$1"
+}
+
+archive_tool() {
+  local command=$1
+  shift
+  local -a args=()
+  local arg
+  for arg in "$@"; do
+    args+=("$(to_host_path "$arg")")
+  done
+  if "$NODE" --input-type=module -e "import 'node:sqlite'" >/dev/null 2>&1; then
+    "$NODE" "$(to_host_path "$PANEL_DIR/archive-tool.mjs")" "$command" "${args[@]}"
+    return $?
+  fi
+  "$PYTHON" "$(to_host_path "$PANEL_DIR/archive_host.py")" "$command" "${args[@]}"
+}
+
+take_panel_snapshot() {
+  local stamp dir name
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  dir="$PREUPDATE_DIR/$stamp"
+  mkdir -p "$dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  archive_tool snapshot "$STATE_DIR/family-vpn.sqlite" "$dir/family-vpn.sqlite" >/dev/null
+  cp -p "$STATE_DIR/master.key" "$dir/master.key"
+  chmod 600 "$dir/master.key" 2>/dev/null || true
+  if [ -f "$ENV_FILE" ]; then
+    cp -p "$ENV_FILE" "$dir/panel.env"
+    chmod 600 "$dir/panel.env" 2>/dev/null || true
+  fi
+  if [ -f "${FAMILY_VPN_BACKUP_PUB:-$ETC_DIR/backup.pub}" ]; then
+    cp -p "${FAMILY_VPN_BACKUP_PUB:-$ETC_DIR/backup.pub}" "$dir/backup.pub"
+  fi
+  archive_tool manifest "$dir" >/dev/null
+  archive_tool verify "$dir" >/dev/null
+  (
+    cd "$dir"
+    : > SHA256SUMS
+    for name in family-vpn.sqlite master.key panel.env backup.pub; do
+      [ -f "$name" ] || continue
+      hash=$(sha256sum "$name" | awk '{print $1}')
+      printf '%s  %s\n' "$hash" "$name" >> SHA256SUMS
+    done
+    sha256sum -c SHA256SUMS >/dev/null
+  )
+  printf '%s\n' "$dir"
+}
+
+restore_panel_snapshot() {
+  local backup=$1 name
+  [ -f "$backup/family-vpn.sqlite" ] || die "SNAPSHOT_MISSING"
+  [ -f "$backup/master.key" ] || die "SNAPSHOT_MISSING"
+  archive_tool verify "$backup" >/dev/null
+  rm -f "$STATE_DIR/family-vpn.sqlite" "$STATE_DIR/family-vpn.sqlite-wal" "$STATE_DIR/family-vpn.sqlite-shm"
+  cp -p "$backup/family-vpn.sqlite" "$STATE_DIR/family-vpn.sqlite"
+  cp -p "$backup/master.key" "$STATE_DIR/master.key"
+  chmod 600 "$STATE_DIR/family-vpn.sqlite" "$STATE_DIR/master.key" 2>/dev/null || true
+  if [ -f "$backup/panel.env" ]; then
+    cp -p "$backup/panel.env" "$ENV_FILE"
+    chmod 600 "$ENV_FILE" 2>/dev/null || true
+  fi
+  if [ -f "$backup/backup.pub" ]; then
+    cp -p "$backup/backup.pub" "${FAMILY_VPN_BACKUP_PUB:-$ETC_DIR/backup.pub}"
+  fi
+  log "PANEL_RESTORED $backup"
+}
+
+latest_panel_snapshot() {
+  local dir latest=""
+  [ -d "$PREUPDATE_DIR" ] || return 1
+  for dir in "$PREUPDATE_DIR"/*; do
+    [ -d "$dir" ] || continue
+    [ -f "$dir/manifest.json" ] || continue
+    latest=$dir
+  done
+  [ -n "$latest" ] || return 1
+  printf '%s\n' "$latest"
+}
+
+current_panel_image() {
+  local container=""
+  if [ "${FAMILY_VPN_UPDATE_TEST:-}" = "1" ]; then
+    printf '%s\n' "${FAMILY_VPN_UPDATE_IMAGE_BEFORE:-previous-image}"
+    return 0
+  fi
+  command -v docker >/dev/null 2>&1 || {
+    printf '\n'
+    return 0
+  }
+  container=$(docker ps -aq --filter name='family-vpn-panel' | head -n 1 || true)
+  if [ -z "$container" ]; then
+    printf '\n'
+    return 0
+  fi
+  docker inspect --format '{{.Image}}' "$container" 2>/dev/null || printf '\n'
+}
+
+apply_panel_update() {
+  local previous=$1
+  if [ -n "${FAMILY_VPN_UPDATE_COMPOSE:-}" ]; then
+    FAMILY_VPN_PREVIOUS_IMAGE="$previous" FAMILY_VPN_UPDATE_PHASE=apply \
+      bash "$FAMILY_VPN_UPDATE_COMPOSE"
+    return $?
+  fi
+  [ -f "$ENV_FILE" ] || return 1
+  compose up -d --build --no-deps panel || return 1
+  local attempt status url
+  url=$(awk -F= '/^FAMILY_VPN_PUBLIC_URL=/{print $2; exit}' "$ENV_FILE")
+  url=${url%/}
+  [ -n "$url" ] || return 1
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    status=$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 5 "$url/login" || true)
+    [ "$status" = "200" ] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+rollback_panel_runtime() {
+  local backup=$1 previous=""
+  previous=$(tr -d '\r' <"$backup/previous-image-id" 2>/dev/null || true)
+  if [ -n "${FAMILY_VPN_UPDATE_COMPOSE:-}" ]; then
+    FAMILY_VPN_PREVIOUS_IMAGE="$previous" FAMILY_VPN_UPDATE_PHASE=rollback \
+      bash "$FAMILY_VPN_UPDATE_COMPOSE" || true
+    return 0
+  fi
+  if [ -n "$previous" ] && [ -f "$ENV_FILE" ]; then
+    FAMILY_VPN_PANEL_IMAGE="$previous" compose up -d --no-deps --no-build --pull never panel || true
+  fi
+}
+
+require_panel_files() {
+  [ -f "$STATE_DIR/family-vpn.sqlite" ] || die "SQLITE_MISSING: обновление не создаёт новую базу"
+  [ -f "$STATE_DIR/master.key" ] || die "KEY_MISSING: обновление не создаёт новый master.key"
+  [ -s "$STATE_DIR/master.key" ] || die "KEY_MISSING: обновление не создаёт новый master.key"
+}
+
+require_update_host() {
+  [ "${FAMILY_VPN_UPDATE_TEST:-}" = "1" ] && return 0
+  [ "$(id -u)" -eq 0 ] || die "запустите установщик от root"
+  [ -r /etc/os-release ] || die "нужна Ubuntu 24.04"
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] || die "нужна Ubuntu 24.04, обнаружено ${PRETTY_NAME:-unknown}"
+  command -v docker >/dev/null 2>&1 || die "нужен Docker"
+  command -v sha256sum >/dev/null 2>&1 || die "нужен sha256sum"
+}
+
+admin_still_present() {
+  local code=0
+  set +e
+  admin_exists
+  code=$?
+  set -e
+  [ "$code" -eq 0 ]
+}
+
+cmd_update() {
+  require_panel_files
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "UPDATE_DRY_RUN dir=$STATE_DIR"
+    log "Сначала снимается проверяемая копия SQLite, master.key и panel.env."
+    log "Контейнер panel пересобирается на том же каталоге. Новая пустая база не создаётся."
+    log "WireGuard, peers, подсеть, NAT, firewall и SSH не изменяются."
+    exit 0
+  fi
+  require_update_host
+  local backup key_before key_after image_before
+  backup=$(take_panel_snapshot) || die "BACKUP_FAIL"
+  key_before=$(sha256sum "$STATE_DIR/master.key" | awk '{print $1}')
+  image_before=$(current_panel_image)
+  printf '%s\n' "$image_before" >"$backup/previous-image-id"
+  chmod 600 "$backup/previous-image-id" 2>/dev/null || true
+  if ! apply_panel_update "$image_before" || ! admin_still_present; then
+    restore_panel_snapshot "$backup"
+    rollback_panel_runtime "$backup"
+    die "UPDATE_ROLLBACK"
+  fi
+  key_after=$(sha256sum "$STATE_DIR/master.key" | awk '{print $1}')
+  if [ "$key_after" != "$key_before" ]; then
+    restore_panel_snapshot "$backup"
+    rollback_panel_runtime "$backup"
+    die "UPDATE_ROLLBACK"
+  fi
+  log "UPDATE_OK backup=$backup"
+}
+
+cmd_rollback() {
+  local backup=""
+  backup=$(latest_panel_snapshot) || die "SNAPSHOT_MISSING"
+  archive_tool verify "$backup" >/dev/null
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "ROLLBACK_DRY_RUN backup=$backup"
+    log "Живая база не изменялась. Восстановление вернёт SQLite и master.key из этого снимка."
+    exit 0
+  fi
+  require_update_host
+  restore_panel_snapshot "$backup"
+  rollback_panel_runtime "$backup"
+  admin_still_present || die "ROLLBACK_ADMIN_MISSING"
+  log "ROLLBACK_OK backup=$backup"
+}
+
 cmd_check() {
   local required template
   for required in \
@@ -810,7 +1025,8 @@ cmd_check() {
   grep -q -- '-noservername' "$PANEL_DIR/install-panel.sh"
   grep -q 'default_sni __PANEL_IP__' "$PANEL_DIR/Caddyfile.https"
   grep -q 'KEY_MISMATCH' "$PANEL_DIR/archive-tool.mjs"
-  grep -q 'SCHEMA_MAX = 3' "$PANEL_DIR/archive-tool.mjs"
+  grep -q 'SCHEMA_MAX = 4' "$PANEL_DIR/archive-tool.mjs"
+  grep -q 'SCHEMA_MAX = 4' "$PANEL_DIR/archive_host.py"
   grep -q 'UPLOAD_OK' "$PANEL_DIR/backup-panel.sh"
   grep -q 'DATA_EXISTS' "$PANEL_DIR/restore-panel.sh"
   grep -q 'DECRYPT_FAIL' "$PANEL_DIR/restore-panel.sh"
@@ -882,6 +1098,16 @@ while [ $# -gt 0 ]; do
     --new)
       [ -z "$MODE" ] || die "укажите только один режим"
       MODE=new
+      shift
+      ;;
+    --update)
+      [ -z "$MODE" ] || die "укажите только один режим"
+      MODE=update
+      shift
+      ;;
+    --rollback)
+      [ -z "$MODE" ] || die "укажите только один режим"
+      MODE=rollback
       shift
       ;;
     --restore)
@@ -959,9 +1185,11 @@ done
 
 case "$MODE" in
   new) cmd_new ;;
+  update) cmd_update ;;
+  rollback) cmd_rollback ;;
   restore) cmd_restore "${RESTORE_ARCHIVE:-}" ;;
   setup-token) cmd_setup_token ;;
   check) cmd_check ;;
   verify-image) verify_panel_image; log "IMAGE_OK" ;;
-  *) usage; die "укажите --new, --restore, --setup-token или --check" ;;
+  *) usage; die "укажите --new, --update, --rollback, --restore, --setup-token или --check" ;;
 esac

@@ -6,6 +6,11 @@ PUBLIC_URL=${FAMILY_VPN_PUBLIC_URL:-http://127.0.0.1:13010}
 PUBLIC_URL=${PUBLIC_URL%/}
 OUT="$ROOT/releases"
 AGENT_NAME=family-vpn-agent-linux-amd64
+VERSION=$(sed -n 's/^AGENT_VERSION="\([^"]*\)"/\1/p' "$ROOT/installer/install.sh")
+[ -n "$VERSION" ] || {
+  echo "AGENT_VERSION is missing from installer/install.sh" >&2
+  exit 1
+}
 
 [ -f "$OUT/$AGENT_NAME" ] || {
   echo "missing $OUT/$AGENT_NAME; run full build-release.sh first" >&2
@@ -49,7 +54,7 @@ EOF
 chmod 0755 "$OUT/bootstrap.sh"
 
 cat > "$OUT/INSTALL.txt" <<EOF
-Family VPN agent release 0.4.0
+Family VPN agent release $VERSION
 
 Preferred one-line install (checksum of install.sh is pinned; no manual hashing):
 
