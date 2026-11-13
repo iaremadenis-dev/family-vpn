@@ -55,6 +55,9 @@ command -v age-keygen >/dev/null 2>&1 || die "age-keygen required for panel dry-
 age-keygen -o "$WORKDIR/age.txt" >/dev/null
 PUB=$(age-keygen -y "$WORKDIR/age.txt" | tr -d '\r\n')
 [[ "$PUB" =~ ^age1[0-9a-z]+$ ]] || die "invalid age pubkey from age-keygen"
+# Image-based pack has no Dockerfile; dry-run must set the pinned image env like install-family-vpn.sh.
+export FAMILY_VPN_PANEL_IMAGE=$EXPECTED_DIGEST
+export FAMILY_VPN_PANEL_DIGEST=$EXPECTED_DIGEST
 bash "$PACK/panel/install-panel.sh" --new --email admin@example.com --backup-pubkey "$PUB" --ip 203.0.113.50 --dry-run \
   | tee "$WORKDIR/panel-dry.txt"
 grep -q 'DRY_RUN_OK' "$WORKDIR/panel-dry.txt"
@@ -66,7 +69,9 @@ mkdir -p "$WORKDIR/state"
 printf 'x' >"$WORKDIR/state/family-vpn.sqlite"
 printf 'y' >"$WORKDIR/state/master.key"
 set +e
-FAMILY_VPN_PANEL_DIR="$WORKDIR/state" bash "$PACK/panel/install-panel.sh" --new --email admin@example.com --backup-pubkey "$PUB" --ip 203.0.113.50 --dry-run >"$WORKDIR/refuse.out" 2>"$WORKDIR/refuse.err"
+FAMILY_VPN_PANEL_DIR="$WORKDIR/state" FAMILY_VPN_PANEL_IMAGE=$EXPECTED_DIGEST FAMILY_VPN_PANEL_DIGEST=$EXPECTED_DIGEST \
+  bash "$PACK/panel/install-panel.sh" --new --email admin@example.com --backup-pubkey "$PUB" --ip 203.0.113.50 --dry-run \
+  >"$WORKDIR/refuse.out" 2>"$WORKDIR/refuse.err"
 refuse_code=$?
 set -e
 [ "$refuse_code" -eq 3 ] || die "expected exit 3 on existing sqlite, got $refuse_code"

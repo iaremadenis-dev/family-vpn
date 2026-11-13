@@ -73,4 +73,4 @@ jobs:
           ! grep -E '0\.5\.0' releases/install.sh
 
       - name: Clean Ubuntu 24.04 nested Docker + image load
-        run: bash scripts/run-clean-ubuntu-docker-test.sh dist/family-vpn-panel-image.tar dist/panel-image-id.txt
+        run: bash scripts/run-clean-ubuntu-docker-test.sh "$GITHUB_WORKSPACE/dist/family-vpn-panel-image.tar" "$GITHUB_WORKSPACE/dist/panel-image-id.txt"
