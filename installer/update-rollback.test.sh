@@ -46,13 +46,15 @@ case "${1:-}" in
 esac
 exit 0
 EOF
+chmod +x "$work/new-ok" "$work/new-oldver"
 
 install() {
-  local dest_dir=0
+  local dest_dir=0 mode=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -d) dest_dir=1; shift ;;
-      -m|-o|-g) shift 2 ;;
+      -m) mode=$2; shift 2 ;;
+      -o|-g) shift 2 ;;
       --) shift; break ;;
       -*) echo "unexpected install flag $1" >&2; return 1 ;;
       *) break ;;
@@ -64,6 +66,9 @@ install() {
   fi
   mkdir -p "$(dirname "$2")"
   cp "$1" "$2"
+  if [ -n "$mode" ]; then
+    chmod "$mode" "$2"
+  fi
 }
 
 sys_log="$work/systemctl.log"
