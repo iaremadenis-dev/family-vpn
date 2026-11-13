@@ -39,8 +39,16 @@ grep -q -- '--no-build' "$pack/panel/install-panel.sh"
 
 grep -q 'openssl pkeyutl -verify' "$pack/install-family-vpn.sh"
 grep -q 'EXPECTED_PUB_FP' "$pack/install-family-vpn.sh"
+grep -q '/opt/family-vpn/install' "$pack/install-family-vpn.sh"
+grep -q 'ensure_permanent_install_root' "$pack/panel/install-panel.sh"
+grep -q 'FAMILY_VPN_REQUIRE_HEARTBEAT_SIG=1' "$pack/panel/install-panel.sh"
+grep -q -- '--project-name family-vpn' "$pack/panel/install-panel.sh"
 test -f "$pack/INSTALL.sig"
 test -f "$pack/release-signing.pub"
+boot=$(find "$work/dist" -name 'panel-install-boot-*.sh' | head -1)
+[ -n "$boot" ]
+grep -q 'family-vpn-panel-image.tar' "$boot"
+grep -q 'ONE_COMMAND=' "$work/dist/IMAGE-INSTALL.txt"
 grep -q 'configure_ufw_panel' "$pack/panel/install-panel.sh"
 grep -q 'harden_ssh_if_safe' "$pack/panel/install-panel.sh"
 

@@ -119,11 +119,16 @@ printf '%s  family-vpn-panel-image.tar\n' "$(sha256sum "$bundle/family-vpn-panel
 # --- Fake docker / curl / id ---
 bin="$work/bin"
 mkdir -p "$bin"
+# Production Compose V2 names: family-vpn-panel-1 / family-vpn-caddy-1 (NOT bare service names).
 cat >"$bin/docker" <<EOF
 #!/bin/bash
 set -euo pipefail
 STATE="$work/docker-state"
 mkdir -p "\$STATE"
+PANEL_ID=ctrpanel1
+CADDY_ID=ctrcaddy1
+PANEL_NAME=family-vpn-panel-1
+CADDY_NAME=family-vpn-caddy-1
 PANEL_DATA_MOUNT="$fake_root/var/lib/family-vpn/panel"
 CADDYFILE_MOUNT="$fake_root/etc/family-vpn/Caddyfile"
 CERTS_MOUNT="$fake_root/var/lib/family-vpn/certs"
@@ -132,6 +137,18 @@ RELEASES_MOUNT="$fake_root/tmp/family-vpn-install/releases"
 if [ -f "\$STATE/panel_data_mount" ]; then PANEL_DATA_MOUNT=\$(cat "\$STATE/panel_data_mount"); fi
 if [ -f "\$STATE/caddyfile_mount" ]; then CADDYFILE_MOUNT=\$(cat "\$STATE/caddyfile_mount"); fi
 if [ -f "\$STATE/certs_mount" ]; then CERTS_MOUNT=\$(cat "\$STATE/certs_mount"); fi
+is_panel() {
+  case "\$1" in
+    "\$PANEL_ID"|"\$PANEL_NAME"|family-vpn-panel) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+is_caddy() {
+  case "\$1" in
+    "\$CADDY_ID"|"\$CADDY_NAME"|family-vpn-caddy) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 cmd=\${1:-}
 case "\$cmd" in
   inspect)
@@ -143,8 +160,15 @@ case "\$cmd" in
       prev=\$arg
     done
     case "\$format" in
+      *State.Running*|*Running*)
+        if is_panel "\$name" || is_caddy "\$name"; then
+          if [ -f "\$STATE/stopped" ]; then printf 'false\n'; else printf 'true\n'; fi
+          exit 0
+        fi
+        exit 1
+        ;;
       *working_dir*)
-        if [ "\$name" = "family-vpn-panel" ] || [ "\$name" = "family-vpn-caddy" ]; then
+        if is_panel "\$name" || is_caddy "\$name"; then
           if [ -f "\$STATE/compose_dir" ]; then cat "\$STATE/compose_dir"
           else printf '%s\n' "$fake_root/tmp/family-vpn-install/panel"
           fi
@@ -152,13 +176,13 @@ case "\$cmd" in
         fi
         ;;
       *com.docker.compose.project*)
-        if [ "\$name" = "family-vpn-panel" ]; then
+        if is_panel "\$name" || is_caddy "\$name"; then
           printf '%s\n' "family-vpn"
           exit 0
         fi
         ;;
       *Image*)
-        if [ "\$name" = "family-vpn-panel" ]; then
+        if is_panel "\$name"; then
           if [ -f "\$STATE/running_image" ]; then cat "\$STATE/running_image"
           else printf '%s\n' "$DIGEST_OLD"
           fi
@@ -166,30 +190,29 @@ case "\$cmd" in
         fi
         ;;
       *Mounts*)
-        # Emulate docker inspect mount Source lookup used by assert_live_bind_mounts.
         case "\$format" in
           */data*)
-            [ "\$name" = "family-vpn-panel" ] || exit 1
+            is_panel "\$name" || exit 1
             printf '%s\n' "\$PANEL_DATA_MOUNT"
             exit 0
             ;;
           */etc/caddy/Caddyfile*)
-            [ "\$name" = "family-vpn-caddy" ] || exit 1
+            is_caddy "\$name" || exit 1
             printf '%s\n' "\$CADDYFILE_MOUNT"
             exit 0
             ;;
           */certs*)
-            [ "\$name" = "family-vpn-caddy" ] || exit 1
+            is_caddy "\$name" || exit 1
             printf '%s\n' "\$CERTS_MOUNT"
             exit 0
             ;;
           */acme*)
-            [ "\$name" = "family-vpn-caddy" ] || exit 1
+            is_caddy "\$name" || exit 1
             printf '%s\n' "\$ACME_MOUNT"
             exit 0
             ;;
           */srv/releases*)
-            [ "\$name" = "family-vpn-caddy" ] || exit 1
+            is_caddy "\$name" || exit 1
             printf '%s\n' "\$RELEASES_MOUNT"
             exit 0
             ;;
@@ -216,14 +239,14 @@ case "\$cmd" in
       done
       if [ "\$ref" = "$DIGEST_OLD" ]; then
         case "\$format" in
-          *'.Id'*|*'{{.Id}}'*) printf '%s\n' "$DIGEST_OLD" ;;
+          *Id*) printf '%s\n' "$DIGEST_OLD" ;;
           *) exit 0 ;;
         esac
         exit 0
       fi
       if [ -f "\$STATE/loaded" ] && [ "\$ref" = "$DIGEST_NEW" ]; then
         case "\$format" in
-          *'.Id'*|*'{{.Id}}'*) printf '%s\n' "$DIGEST_NEW" ;;
+          *Id*) printf '%s\n' "$DIGEST_NEW" ;;
           *) exit 0 ;;
         esac
         exit 0
@@ -237,14 +260,46 @@ case "\$cmd" in
     exit 0
     ;;
   ps)
-    printf '%s\n' "family-vpn-panel"
-    printf '%s\n' "family-vpn-caddy"
+    quiet=0
+    service_filter=""
+    project_filter=""
+    for arg in "\$@"; do
+      case "\$arg" in
+        -q) quiet=1 ;;
+        --filter) ;;
+        label=com.docker.compose.service=*)
+          service_filter=\${arg#label=com.docker.compose.service=}
+          ;;
+        label=com.docker.compose.project=*)
+          project_filter=\${arg#label=com.docker.compose.project=}
+          ;;
+      esac
+    done
+    if [ -f "\$STATE/stopped" ]; then exit 0; fi
+    if [ "\$quiet" = "1" ]; then
+      if [ -n "\$service_filter" ]; then
+        case "\$service_filter" in
+          panel) printf '%s\n' "\$PANEL_ID" ;;
+          caddy) printf '%s\n' "\$CADDY_ID" ;;
+        esac
+        exit 0
+      fi
+      if [ -n "\$project_filter" ]; then
+        printf '%s\n' "\$PANEL_ID"
+        printf '%s\n' "\$CADDY_ID"
+        exit 0
+      fi
+      printf '%s\n' "\$PANEL_ID"
+      printf '%s\n' "\$CADDY_ID"
+      exit 0
+    fi
+    # Names-only listing (must NOT match bare family-vpn-panel — production uses -1 suffix).
+    printf '%s\n' "\$PANEL_NAME"
+    printf '%s\n' "\$CADDY_NAME"
     exit 0
     ;;
   compose)
-    # Record last compose invocation and pretend success.
     printf '%s\n' "\$*" >>"\$STATE/compose.log"
-    # After up, relocate working dir to permanent path if present.
     if printf '%s' "\$*" | grep -q 'up'; then
       if [ -d "$fake_root/opt/family-vpn/install/panel" ]; then
         printf '%s\n' "$fake_root/opt/family-vpn/install/panel" >"\$STATE/compose_dir"
@@ -253,7 +308,6 @@ case "\$cmd" in
         printf '%s\n' "\$FAMILY_VPN_PANEL_IMAGE" >"\$STATE/running_image"
       fi
     fi
-    # Require --project-name so orphaned /tmp recoveries keep the live project.
     if ! printf '%s' "\$*" | grep -q -- '--project-name'; then
       printf 'compose missing --project-name\n' >&2
       exit 1

@@ -122,9 +122,59 @@ restore_data_from_backup() {
   log "data restored from $bak"
 }
 
+# Compose V2 names containers family-vpn-panel-1 (not family-vpn-panel).
+# Resolve by project/service labels + Running=true via docker inspect.
+PANEL_CONTAINER=""
+CADDY_CONTAINER=""
+
+resolve_compose_container() {
+  local service=$1
+  local project=${2:-family-vpn}
+  local id name running
+  id=$(docker ps -q \
+    --filter "label=com.docker.compose.project=${project}" \
+    --filter "label=com.docker.compose.service=${service}" \
+    2>/dev/null | head -n 1 || true)
+  if [ -z "$id" ]; then
+    # Fallback name patterns used by Compose v1/v2.
+    for name in "${project}-${service}-1" "${project}_${service}_1" "${project}-${service}" "$service"; do
+      running=$(docker inspect "$name" --format '{{.State.Running}}' 2>/dev/null || true)
+      if [ "$running" = "true" ]; then
+        printf '%s\n' "$name"
+        return 0
+      fi
+    done
+    return 1
+  fi
+  running=$(docker inspect "$id" --format '{{.State.Running}}' 2>/dev/null || true)
+  [ "$running" = "true" ] || return 1
+  printf '%s\n' "$id"
+  return 0
+}
+
+resolve_live_containers() {
+  local project=family-vpn
+  local any_id
+  any_id=$(docker ps -q --filter 'label=com.docker.compose.project=family-vpn' 2>/dev/null | head -n 1 || true)
+  if [ -n "$any_id" ]; then
+    project=$(docker inspect "$any_id" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)
+    [ -n "$project" ] || project=family-vpn
+  fi
+  PANEL_CONTAINER=$(resolve_compose_container panel "$project") \
+    || die "panel container not running; refuse update"
+  CADDY_CONTAINER=$(resolve_compose_container caddy "$project") \
+    || die "caddy container not running; refuse update"
+  log "live containers: panel=$PANEL_CONTAINER caddy=$CADDY_CONTAINER project=$project"
+}
+
 inspect_compose_label() {
   local key=$1
-  docker inspect family-vpn-panel --format "{{index .Config.Labels \"$key\"}}" 2>/dev/null || true
+  local ctr=${PANEL_CONTAINER:-}
+  if [ -z "$ctr" ]; then
+    ctr=$(resolve_compose_container panel) || true
+  fi
+  [ -n "$ctr" ] || return 0
+  docker inspect "$ctr" --format "{{index .Config.Labels \"$key\"}}" 2>/dev/null || true
 }
 
 inspect_mount_source() {
@@ -156,25 +206,22 @@ compose_at() {
 # Refuse update when live bind mounts do not match the permanent data/TLS paths.
 assert_live_bind_mounts() {
   local panel_data caddyfile_src certs_src acme_src
-  docker ps --format '{{.Names}}' | grep -qx 'family-vpn-panel' \
-    || die "panel container not running; refuse update"
-  docker ps --format '{{.Names}}' | grep -qx 'family-vpn-caddy' \
-    || die "caddy container not running; refuse update"
+  resolve_live_containers
 
-  panel_data=$(inspect_mount_source family-vpn-panel /data)
+  panel_data=$(inspect_mount_source "$PANEL_CONTAINER" /data)
   [ -n "$panel_data" ] || die "panel /data mount missing in docker inspect; refuse"
   [ "$panel_data" = "$STATE_DIR" ] \
     || die "panel /data mount is '$panel_data', expected $STATE_DIR; refuse (no production changes)"
 
-  caddyfile_src=$(inspect_mount_source family-vpn-caddy /etc/caddy/Caddyfile)
+  caddyfile_src=$(inspect_mount_source "$CADDY_CONTAINER" /etc/caddy/Caddyfile)
   [ "$caddyfile_src" = "$ETC_DIR/Caddyfile" ] \
     || die "caddy Caddyfile mount is '$caddyfile_src', expected $ETC_DIR/Caddyfile; refuse"
 
-  certs_src=$(inspect_mount_source family-vpn-caddy /certs)
+  certs_src=$(inspect_mount_source "$CADDY_CONTAINER" /certs)
   [ "$certs_src" = "/var/lib/family-vpn/certs" ] \
     || die "caddy /certs mount is '$certs_src', expected /var/lib/family-vpn/certs; refuse"
 
-  acme_src=$(inspect_mount_source family-vpn-caddy /acme)
+  acme_src=$(inspect_mount_source "$CADDY_CONTAINER" /acme)
   if [ -n "$acme_src" ] && [ "$acme_src" != "/var/lib/family-vpn/acme" ]; then
     die "caddy /acme mount is '$acme_src', expected /var/lib/family-vpn/acme; refuse"
   fi
@@ -216,9 +263,15 @@ restore_compose_from_bundle() {
     cp -a "$PANEL_SRC/systemd/." "$INSTALL_ROOT/panel/systemd/"
   fi
   # Prefer copying whatever the live caddy releases mount still has (may be /tmp after wipe).
-  local live_releases
-  live_releases=$(inspect_mount_source family-vpn-caddy /srv/releases)
-  if [ -n "$live_releases" ] && [ -d "$live_releases" ]; then
+  local live_releases caddy_ctr
+  caddy_ctr=${CADDY_CONTAINER:-}
+  if [ -z "$caddy_ctr" ]; then
+    caddy_ctr=$(resolve_compose_container caddy) || true
+  fi
+  if [ -n "$caddy_ctr" ]; then
+    live_releases=$(inspect_mount_source "$caddy_ctr" /srv/releases)
+  fi
+  if [ -n "${live_releases:-}" ] && [ -d "$live_releases" ]; then
     cp -a "$live_releases/." "$INSTALL_ROOT/releases/" 2>/dev/null || true
   fi
   if [ -d "$BUNDLE_DIR/releases" ]; then
@@ -258,7 +311,12 @@ detect_running_compose_dir() {
 }
 
 current_image_id() {
-  docker inspect family-vpn-panel --format '{{.Image}}' 2>/dev/null || true
+  local ctr=${PANEL_CONTAINER:-}
+  if [ -z "$ctr" ]; then
+    ctr=$(resolve_compose_container panel) || true
+  fi
+  [ -n "$ctr" ] || return 0
+  docker inspect "$ctr" --format '{{.Image}}' 2>/dev/null || true
 }
 
 admin_row_present() {

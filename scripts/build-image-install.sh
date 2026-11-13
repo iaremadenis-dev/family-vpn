@@ -10,6 +10,8 @@ COMMIT=$(git -C "$ROOT" rev-parse HEAD)
 SHORT=$(git -C "$ROOT" rev-parse --short=12 HEAD)
 IMAGE_REF=${FAMILY_VPN_PANEL_IMAGE:-}
 DIGEST=${FAMILY_VPN_PANEL_DIGEST:-}
+PUBLIC_URL=${FAMILY_VPN_PUBLIC_URL:-https://62.133.60.25}
+PUBLIC_URL=${PUBLIC_URL%/}
 
 die() {
   printf '%s\n' "family-vpn-install-pack: $*" >&2
@@ -135,11 +137,14 @@ cat >"$pack/install-family-vpn.sh" <<EOF
 #!/bin/bash
 # Minimal Family VPN installer. The panel application arrives only as a Docker image.
 # Verifies SHA-256 MANIFEST + Ed25519 signature + pinned pubkey fingerprint before exec.
+# Materializes Compose under /opt/family-vpn/install so /tmp wipe cannot orphan the stack.
 set -euo pipefail
-cd "\$(dirname "\$0")"
+HERE=\$(cd "\$(dirname "\$0")" && pwd)
+cd "\$HERE"
 IMAGE_REF='$IMAGE_REF'
 IMAGE_DIGEST='$DIGEST'
 EXPECTED_PUB_FP='$PUB_FP'
+PERM=/opt/family-vpn/install
 if ! sha256sum -c MANIFEST; then
   printf '%s\n' "family-vpn-install: пакет повреждён или подменён" >&2
   exit 1
@@ -169,8 +174,34 @@ esac
 export FAMILY_VPN_PANEL_IMAGE="\$IMAGE_REF"
 export FAMILY_VPN_PANEL_DIGEST="\$IMAGE_DIGEST"
 if [ -z "\${FAMILY_VPN_PANEL_IMAGE_TAR:-}" ]; then
-  export FAMILY_VPN_PANEL_IMAGE_TAR=/tmp/family-vpn-panel-image.tar
+  # Prefer permanent path; fall back to legacy /tmp for offline copies.
+  if [ -f "\$PERM/family-vpn-panel-image.tar" ]; then
+    export FAMILY_VPN_PANEL_IMAGE_TAR="\$PERM/family-vpn-panel-image.tar"
+  else
+    export FAMILY_VPN_PANEL_IMAGE_TAR=/tmp/family-vpn-panel-image.tar
+  fi
 fi
+# Install pack permanently before first compose up (idempotent).
+# Skip for read-only --check / help so offline tests need no /opt write.
+case "\${1:-}" in
+  --check|--verify-image|-h|--help) ;;
+  *)
+    if [ "\$HERE" != "\$PERM" ]; then
+      mkdir -p "\$PERM"
+      cp -a "\$HERE/panel" "\$PERM/"
+      cp -a "\$HERE/releases" "\$PERM/"
+      for f in BUNDLE-INFO.txt release-signing.pub MANIFEST INSTALL.sig EXPECTED_PUB_FP install-family-vpn.sh; do
+        [ -f "\$HERE/\$f" ] && cp -a "\$HERE/\$f" "\$PERM/\$f"
+      done
+      if [ -f "\$FAMILY_VPN_PANEL_IMAGE_TAR" ] && [ ! -f "\$PERM/family-vpn-panel-image.tar" ]; then
+        cp -a "\$FAMILY_VPN_PANEL_IMAGE_TAR" "\$PERM/family-vpn-panel-image.tar"
+        [ -f "\${FAMILY_VPN_PANEL_IMAGE_TAR}.sha256" ] && cp -a "\${FAMILY_VPN_PANEL_IMAGE_TAR}.sha256" "\$PERM/family-vpn-panel-image.tar.sha256" || true
+        export FAMILY_VPN_PANEL_IMAGE_TAR="\$PERM/family-vpn-panel-image.tar"
+      fi
+      cd "\$PERM"
+    fi
+    ;;
+esac
 exec bash ./panel/install-panel.sh "\$@"
 EOF
 chmod 755 "$pack/install-family-vpn.sh"
@@ -191,17 +222,67 @@ tar -C "$stage" -czf "$archive" family-vpn-install
 archive_hash=$(sha256sum "$archive" | awk '{ print $1 }')
 printf '%s  %s\n' "$archive_hash" "$(basename "$archive")" >"$archive.sha256"
 node "$ROOT/scripts/sign-release-file.mjs" "$archive"
+
+# One-line HTTPS bootstrap: verifies SHA-256 + Ed25519, fetches image tar, installs under /opt.
+BOOT="$OUT/panel-install-boot-$SHORT.sh"
+cat >"$BOOT" <<EOF
+#!/bin/bash
+# Family VPN panel fresh install bootstrap $SHORT
+# Downloads signed install pack + digest-pinned image tar. Does not wipe existing SQLite.
+set -euo pipefail
+BACKEND="${PUBLIC_URL}"
+ARCHIVE_NAME="$(basename "$archive")"
+EXPECTED_ARCHIVE_SHA="${archive_hash}"
+EXPECTED_PUB_FP="${PUB_FP}"
+EXPECTED_IMAGE_DIGEST="${DIGEST}"
+umask 077
+[ "\$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
+TMP=\$(mktemp -d)
+trap 'rm -rf "\$TMP"' EXIT
+curl -fsSL "\$BACKEND/releases/\$ARCHIVE_NAME" -o "\$TMP/\$ARCHIVE_NAME"
+curl -fsSL "\$BACKEND/releases/\$ARCHIVE_NAME.sha256" -o "\$TMP/\$ARCHIVE_NAME.sha256"
+curl -fsSL "\$BACKEND/releases/\$ARCHIVE_NAME.sig" -o "\$TMP/\$ARCHIVE_NAME.sig"
+curl -fsSL "\$BACKEND/releases/release-signing.pub" -o "\$TMP/release-signing.pub"
+echo "\$EXPECTED_ARCHIVE_SHA  \$TMP/\$ARCHIVE_NAME" | sha256sum -c -
+(cd "\$TMP" && sha256sum -c "\$ARCHIVE_NAME.sha256")
+echo "\$EXPECTED_PUB_FP  \$TMP/release-signing.pub" | sha256sum -c -
+SIG_B64=\$(tr -d '\\n' <"\$TMP/\$ARCHIVE_NAME.sig" | tr '_-' '/+')
+case \$(( \${#SIG_B64} % 4 )) in
+  2) SIG_B64="\${SIG_B64}==" ;;
+  3) SIG_B64="\${SIG_B64}=" ;;
+esac
+printf '%s' "\$SIG_B64" | openssl base64 -d -A -out "\$TMP/sig.bin"
+openssl pkeyutl -verify -pubin -inkey "\$TMP/release-signing.pub" -rawin -in "\$TMP/\$ARCHIVE_NAME" -sigfile "\$TMP/sig.bin" >/dev/null \
+  || { echo "panel-install-boot: archive signature rejected" >&2; exit 1; }
+mkdir -p /opt/family-vpn/install
+curl -fsSL "\$BACKEND/releases/family-vpn-panel-image.tar" -o /opt/family-vpn/install/family-vpn-panel-image.tar
+curl -fsSL "\$BACKEND/releases/family-vpn-panel-image.tar.sha256" -o /opt/family-vpn/install/family-vpn-panel-image.tar.sha256
+(cd /opt/family-vpn/install && sha256sum -c family-vpn-panel-image.tar.sha256)
+tar -xzf "\$TMP/\$ARCHIVE_NAME" -C "\$TMP"
+export FAMILY_VPN_PANEL_IMAGE_TAR=/opt/family-vpn/install/family-vpn-panel-image.tar
+export FAMILY_VPN_PANEL_IMAGE="\$EXPECTED_IMAGE_DIGEST"
+export FAMILY_VPN_PANEL_DIGEST="\$EXPECTED_IMAGE_DIGEST"
+exec bash "\$TMP/family-vpn-install/install-family-vpn.sh" "\$@"
+EOF
+chmod 755 "$BOOT"
+boot_hash=$(sha256sum "$BOOT" | awk '{ print $1 }')
+node "$ROOT/scripts/sign-release-file.mjs" "$BOOT"
+
 {
   printf '%s\n' "source_commit=$COMMIT"
   printf '%s\n' "image_ref=$IMAGE_REF"
   printf '%s\n' "image_digest=$DIGEST"
   printf '%s\n' "archive=$(basename "$archive")"
   printf '%s\n' "archive_sha256=$archive_hash"
+  printf '%s\n' "PANEL_INSTALL_BOOT=$(basename "$BOOT")"
+  printf '%s\n' "PANEL_INSTALL_BOOT_SHA256=$boot_hash"
   printf '%s\n' "pubkey_fp=$PUB_FP"
+  printf '%s\n' "ONE_COMMAND=curl -fsSL ${PUBLIC_URL}/releases/$(basename "$BOOT") -o /tmp/fvpn-panel-install.sh && echo '${boot_hash}  /tmp/fvpn-panel-install.sh' | sha256sum -c - && sudo bash /tmp/fvpn-panel-install.sh --new --email YOUR@EMAIL --backup-pubkey age1YOURPUBLICKEY"
   printf '%s\n' "files:"
   tar -tzf "$archive" | sort
-} >"$OUT/IMAGE-INSTALL.txt"
+} | tee "$OUT/IMAGE-INSTALL.txt"
 printf '%s\n' "INSTALL_SHA256=$archive_hash"
+printf '%s\n' "INSTALL_BOOT_SHA256=$boot_hash"
 printf '%s\n' "IMAGE_REF=$IMAGE_REF"
 printf '%s\n' "IMAGE_DIGEST=$DIGEST"
 printf '%s\n' "SOURCE_COMMIT=$COMMIT"

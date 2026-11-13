@@ -20,6 +20,8 @@ ENV_FILE="$ETC_DIR/panel.env"
 CADDYFILE="$ETC_DIR/Caddyfile"
 COMPOSE_FILE="$PANEL_DIR/docker-compose.yml"
 LOG_FILE=/var/log/family-vpn-install.log
+# Permanent Compose tree for digest-pinned image installs (survives /tmp wipe + reboot).
+INSTALL_ROOT=${FAMILY_VPN_INSTALL_ROOT:-/opt/family-vpn/install}
 
 MODE=""
 ACTIVATION_CODE=""
@@ -172,14 +174,42 @@ render_caddy() {
   chmod 644 "$CADDYFILE"
 }
 
+# Image-based packs must not keep Compose under /tmp after install.
+ensure_permanent_install_root() {
+  [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ] || return 0
+  if [ "$PANEL_DIR" = "$INSTALL_ROOT/panel" ] && [ -f "$PANEL_DIR/docker-compose.yml" ]; then
+    return 0
+  fi
+  [ -f "$PANEL_DIR/docker-compose.yml" ] || die "не найден $PANEL_DIR/docker-compose.yml"
+  log "Постоянный ComposeDir: копирую установку в $INSTALL_ROOT"
+  mkdir -p "$INSTALL_ROOT/panel" "$INSTALL_ROOT/releases"
+  cp -a "$PANEL_DIR/." "$INSTALL_ROOT/panel/"
+  if [ -d "$APP_DIR/releases" ]; then
+    cp -a "$APP_DIR/releases/." "$INSTALL_ROOT/releases/"
+  fi
+  if [ -f "$APP_DIR/BUNDLE-INFO.txt" ]; then
+    cp -a "$APP_DIR/BUNDLE-INFO.txt" "$INSTALL_ROOT/BUNDLE-INFO.txt"
+  fi
+  APP_DIR="$INSTALL_ROOT"
+  PANEL_DIR="$INSTALL_ROOT/panel"
+  COMPOSE_FILE="$PANEL_DIR/docker-compose.yml"
+  [ -f "$COMPOSE_FILE" ] || die "после копирования нет $COMPOSE_FILE"
+}
+
 write_env() {
   local cert_name="family-vpn-${PANEL_IP}"
   umask 077
+  # Fresh image installs require signed agent heartbeats (agents ship 0.5.0+).
+  local require_hb=""
+  if [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ]; then
+    require_hb="FAMILY_VPN_REQUIRE_HEARTBEAT_SIG=1"
+  fi
   cat >"$ENV_FILE" <<EOF
 NODE_ENV=production
 FAMILY_VPN_DATA_DIR=/data
 FAMILY_VPN_TRUST_PROXY=1
 FAMILY_VPN_PUBLIC_URL=https://${PANEL_IP}
+${require_hb}
 EOF
   cat >"$ETC_DIR/renew.env" <<EOF
 PANEL_IP=${PANEL_IP}
@@ -196,7 +226,8 @@ compose() {
   if [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ]; then
     files+=(-f "$PANEL_DIR/docker-compose.image.yml")
   fi
-  docker compose --project-directory "$PANEL_DIR" --env-file "$ENV_FILE" "${files[@]}" "$@"
+  # Pin Compose project name so containers stay family-vpn-*-1 across path relocates.
+  docker compose --project-name family-vpn --project-directory "$PANEL_DIR" --env-file "$ENV_FILE" "${files[@]}" "$@"
 }
 
 verify_panel_image() {
@@ -790,6 +821,7 @@ cmd_restore() {
   fi
 
   prepare_host
+  ensure_permanent_install_root
   install_packages
   set +e
   if [ "$DECRYPTED" -eq 1 ]; then
@@ -896,6 +928,9 @@ cmd_check() {
   grep -q 'KEY_STAYS_LOCAL' "$PANEL_DIR/push-restore.sh"
   grep -q -- '--decrypted' "$PANEL_DIR/install-panel.sh"
   grep -q 'DIGEST_MISMATCH' "$PANEL_DIR/install-panel.sh"
+  grep -q 'ensure_permanent_install_root' "$PANEL_DIR/install-panel.sh"
+  grep -q 'FAMILY_VPN_REQUIRE_HEARTBEAT_SIG=1' "$PANEL_DIR/install-panel.sh"
+  grep -q -- '--project-name family-vpn' "$PANEL_DIR/install-panel.sh"
   grep -q -- '--no-build' "$PANEL_DIR/install-panel.sh"
   grep -q 'load_verified_image' "$PANEL_DIR/install-panel.sh"
   grep -q 'pull_public_compose_images' "$PANEL_DIR/install-panel.sh"
@@ -939,17 +974,24 @@ cmd_new() {
     log "WireGuard wg0/peers/PostUp не переписываются."
     log "Локальный age-backup не заменяет внешнюю резервную копию (нужен backup.env / S3)."
     log "Повторный запуск при уже существующей базе останавливается, не стирая её."
+    if [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ]; then
+      log "ComposeDir будет в $INSTALL_ROOT/panel; FAMILY_VPN_REQUIRE_HEARTBEAT_SIG=1."
+    fi
     exit 0
   fi
 
   prepare_host
   refuse_existing_data
+  ensure_permanent_install_root
   install_packages
   load_verified_image
   save_pubkey
   issue_setup_token
   start_https
   log "Продление сертификата включено: family-vpn-cert-renew.timer"
+  if [ -n "${FAMILY_VPN_PANEL_IMAGE:-}" ]; then
+    log "ComposeDir=$PANEL_DIR (постоянный); FAMILY_VPN_REQUIRE_HEARTBEAT_SIG=1"
+  fi
   show_installed "$ACTIVATION_CODE"
 }
 
