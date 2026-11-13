@@ -1,0 +1,69 @@
+name: clean-install
+
+# Verifies published family-vpn-0.4.1-33876b1 artifacts for NEW clean Ubuntu installs.
+# Does not deploy, does not touch DE-01/NL-01, does not publish releases.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clean-install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-release-artifacts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install age
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y age
+          age-keygen --version
+
+      - name: Verify published release for clean install
+        run: bash scripts/clean-install-from-release.test.sh
+
+  clean-ubuntu-panel-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download published panel image + install pack
+        run: |
+          set -euo pipefail
+          TAG=family-vpn-0.4.1-33876b1
+          BASE=https://github.com/iaremadenis-dev/family-vpn-releases/releases/download/$TAG
+          mkdir -p dist releases /tmp/fvpn-dl
+          curl -fsSL "$BASE/SHA256SUMS" -o /tmp/fvpn-dl/SHA256SUMS
+          curl -fsSL "$BASE/family-vpn-panel-image-33876b1.tar" -o /tmp/fvpn-dl/family-vpn-panel-image-33876b1.tar
+          curl -fsSL "$BASE/family-vpn-install-33876b1.tar.gz" -o /tmp/fvpn-dl/family-vpn-install-33876b1.tar.gz
+          curl -fsSL "$BASE/family-vpn-agent-linux-amd64" -o /tmp/fvpn-dl/family-vpn-agent-linux-amd64
+          curl -fsSL "$BASE/install.sh" -o /tmp/fvpn-dl/install.sh
+          (cd /tmp/fvpn-dl && sha256sum -c SHA256SUMS)
+          cp /tmp/fvpn-dl/family-vpn-panel-image-33876b1.tar dist/family-vpn-panel-image.tar
+          cp /tmp/fvpn-dl/family-vpn-agent-linux-amd64 releases/family-vpn-agent-linux-amd64
+          cp /tmp/fvpn-dl/install.sh releases/install.sh
+          echo "sha256:39a8844d35e703c769ecc3a16357a6a658dd883c66bdcd41fc70019ceff3fc16" > dist/panel-image-id.txt
+          tar -xzf /tmp/fvpn-dl/family-vpn-install-33876b1.tar.gz -C /tmp
+          rm -rf panel
+          mkdir -p panel
+          cp -a /tmp/family-vpn-install/panel/. panel/
+
+      - name: Agent binary is 0.4.1 not 0.5.0
+        run: |
+          chmod +x releases/family-vpn-agent-linux-amd64
+          test "$(releases/family-vpn-agent-linux-amd64 --version)" = "0.4.1"
+          test "$(releases/family-vpn-agent-linux-amd64 version)" = "0.4.1"
+          grep -E '^AGENT_VERSION="0\.4\.1"' releases/install.sh
+          ! grep -E '0\.5\.0' releases/install.sh
+
+      - name: Clean Ubuntu 24.04 nested Docker + image load
+        run: bash scripts/run-clean-ubuntu-docker-test.sh dist/family-vpn-panel-image.tar dist/panel-image-id.txt
