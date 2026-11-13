@@ -62,13 +62,28 @@ jobs:
           age --version
           age-keygen --version
 
+      - name: Unit gates without root
+        run: |
+          set -euo pipefail
+          (cd agent && go test ./...)
+          npm test
+          npx tsc --noEmit
+          npm run lint
+          npm run build
+          unset FAMILY_VPN_PUBLIC_URL || true
+          bash scripts/build-release.sh
+          (cd releases && sha256sum -c SHA256SUMS)
+          chmod +x releases/family-vpn-agent-linux-amd64
+          test "$(releases/family-vpn-agent-linux-amd64 --version)" = "0.4.1"
+          bash scripts/verify-production-ready.sh
+
       - name: Prove Docker Compose is available on the runner
         run: |
           docker version
           docker compose version
           echo "RUNNER_DOCKER_OK"
 
-      - name: Run the update integration on the host Docker daemon
+      - name: Run the Docker update integration as root
         run: |
           sudo env \
             "PATH=$PATH" \

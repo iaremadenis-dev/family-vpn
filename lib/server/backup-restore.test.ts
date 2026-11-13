@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
@@ -212,7 +221,9 @@ describe("panel backup and restore", () => {
         "S3_PREFIX=lab",
         "",
       ].join("\n"),
+      { mode: 0o600 },
     );
+    chmodSync(backupEnv, 0o600);
     const backupDir = path.join(work, "backups");
     const status = path.join(work, "panel.status");
     const log = path.join(work, "panel.log");

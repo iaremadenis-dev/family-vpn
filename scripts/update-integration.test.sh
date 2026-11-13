@@ -200,37 +200,10 @@ git -C "$ROOT" rev-parse --verify "$NEW^{commit}" >/dev/null
 mkdir -p /opt/family-vpn /var/lib/family-vpn "$ETC_DIR" "$(dirname "$REPORT")" "$ROOT/dist" "$ROOT/releases"
 
 note "HOST_OK ubuntu=$(. /etc/os-release; printf '%s' "$VERSION_ID") docker=$(docker version --format '{{.Server.Version}}')"
+note "UNIT_GATES_EXTERNAL npm/go/tsc/lint/build and the agent release are prepared by the workflow before sudo"
 
-# --- unit gates ---
-(
-  cd "$ROOT/agent"
-  go test ./...
-) || on_fail "go test"
-note "GO_TEST_OK"
-(
-  cd "$ROOT"
-  npm test
-) || on_fail "npm test"
-note "NPM_TEST_OK"
-(
-  cd "$ROOT"
-  npx tsc --noEmit
-) || on_fail "tsc"
-note "TSC_OK"
-(
-  cd "$ROOT"
-  npm run lint
-) || on_fail "eslint"
-note "ESLINT_OK"
-(
-  cd "$ROOT"
-  npm run build
-) || on_fail "npm run build"
-note "BUILD_OK"
-
-# --- agent release artifacts ---
-unset FAMILY_VPN_PUBLIC_URL || true
-bash "$ROOT/scripts/build-release.sh" || on_fail "build-release"
+# Agent release artifacts must already exist (built without root).
+[ -f "$ROOT/releases/SHA256SUMS" ] || on_fail "releases/SHA256SUMS missing"
 (cd "$ROOT/releases" && sha256sum -c SHA256SUMS) || on_fail "SHA256SUMS"
 cmp -s "$ROOT/installer/install.sh" "$ROOT/releases/install.sh" || on_fail "install.sh mismatch"
 chmod +x "$ROOT/releases/family-vpn-agent-linux-amd64"
@@ -238,9 +211,6 @@ test "$("$ROOT/releases/family-vpn-agent-linux-amd64" --version)" = "0.4.1" || o
 test "$("$ROOT/releases/family-vpn-agent-linux-amd64" version)" = "0.4.1" || on_fail "agent version alias"
 note "AGENT_BINARY_OK version=0.4.1"
 
-# Real /proc/stat sample through the shipped agent helpers is covered by go test;
-# also prove the binary can read the host /proc/stat by running a tiny Go probe
-# that reuses the same algorithm from the agent package.
 (
   cd "$ROOT/agent"
   go test -count=1 -run 'TestCPU|TestJson' ./...
@@ -399,8 +369,7 @@ grep -q -- '--update' "$ROOT/releases/INSTALL.txt" || note "AGENT_ONE_LINER_WITH
 note "ONE_COMMAND_PANEL: bash panel/install-from-pc.sh --update --host root@PANEL"
 note "ONE_COMMAND_AGENT: rebuild with FAMILY_VPN_PUBLIC_URL=https://PANEL then use releases/INSTALL.txt update line"
 
-bash "$ROOT/scripts/verify-production-ready.sh" || on_fail "verify-production-ready"
-note "VERIFY_PRODUCTION_READY_OK"
+note "VERIFY_PRODUCTION_READY_EXTERNAL prepared by the workflow before sudo"
 
 note "HTTPS_STATUS=NOT_CHECKED"
 note "WG0_STATUS=NOT_TESTED"
