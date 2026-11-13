@@ -50,10 +50,10 @@ jobs:
           BASE=https://github.com/iaremadenis-dev/family-vpn-releases/releases/download/$TAG
           mkdir -p dist releases /tmp/fvpn-dl
           curl -fsSL "$BASE/SHA256SUMS" -o /tmp/fvpn-dl/SHA256SUMS
-          curl -fsSL "$BASE/family-vpn-panel-image-33876b1.tar" -o /tmp/fvpn-dl/family-vpn-panel-image-33876b1.tar
-          curl -fsSL "$BASE/family-vpn-install-33876b1.tar.gz" -o /tmp/fvpn-dl/family-vpn-install-33876b1.tar.gz
-          curl -fsSL "$BASE/family-vpn-agent-linux-amd64" -o /tmp/fvpn-dl/family-vpn-agent-linux-amd64
-          curl -fsSL "$BASE/install.sh" -o /tmp/fvpn-dl/install.sh
+          while read -r _ name; do
+            [ -n "${name:-}" ] || continue
+            curl -fsSL "$BASE/$name" -o "/tmp/fvpn-dl/$name"
+          done < /tmp/fvpn-dl/SHA256SUMS
           (cd /tmp/fvpn-dl && sha256sum -c SHA256SUMS)
           cp /tmp/fvpn-dl/family-vpn-panel-image-33876b1.tar dist/family-vpn-panel-image.tar
           cp /tmp/fvpn-dl/family-vpn-agent-linux-amd64 releases/family-vpn-agent-linux-amd64

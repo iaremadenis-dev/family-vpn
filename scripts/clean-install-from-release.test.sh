@@ -16,10 +16,10 @@ note() { printf '%s\n' "$*"; }
 
 note "DOWNLOAD_OK base=$BASE"
 curl -fsSL "$BASE/SHA256SUMS" -o SHA256SUMS
-curl -fsSL "$BASE/family-vpn-panel-image-${SHORT}.tar" -o "family-vpn-panel-image-${SHORT}.tar"
-curl -fsSL "$BASE/family-vpn-install-${SHORT}.tar.gz" -o "family-vpn-install-${SHORT}.tar.gz"
-curl -fsSL "$BASE/family-vpn-agent-linux-amd64" -o family-vpn-agent-linux-amd64
-curl -fsSL "$BASE/install.sh" -o install.sh
+while read -r _ name; do
+  [ -n "${name:-}" ] || continue
+  curl -fsSL "$BASE/$name" -o "$name"
+done < SHA256SUMS
 sha256sum -c SHA256SUMS
 note "SHA256_OK"
 
