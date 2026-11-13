@@ -11,6 +11,8 @@ on:
     paths:
       - ".github/workflows/clean-install.yml"
       - "scripts/clean-install-from-release.test.sh"
+      - "scripts/run-clean-ubuntu-docker-test.sh"
+      - "scripts/clean-ubuntu-docker.test.sh"
 
 permissions:
   contents: read
