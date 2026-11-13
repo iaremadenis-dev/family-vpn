@@ -25,7 +25,11 @@ export const metadata: Metadata = {
     "Family VPN — админ-панель одного администратора для серверов WireGuard.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html
       lang="ru"
