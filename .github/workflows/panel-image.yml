@@ -189,6 +189,9 @@ jobs:
             dist/family-vpn-panel-image.tar.sha256
             dist/family-vpn-install-*.tar.gz
             dist/family-vpn-install-*.tar.gz.sha256
+            dist/family-vpn-install-*.tar.gz.sig
+            dist/panel-install-boot-*.sh
+            dist/panel-install-boot-*.sh.sig
             dist/IMAGE-INSTALL.txt
             dist/family-vpn-panel-update-*.tar.gz
             dist/family-vpn-panel-update-*.tar.gz.sha256
@@ -225,6 +228,9 @@ jobs:
             dist/family-vpn-panel-image.tar.sha256 \
             dist/family-vpn-install-*.tar.gz \
             dist/family-vpn-install-*.tar.gz.sha256 \
+            dist/family-vpn-install-*.tar.gz.sig \
+            dist/panel-install-boot-*.sh \
+            dist/panel-install-boot-*.sh.sig \
             dist/IMAGE-INSTALL.txt \
             dist/family-vpn-panel-update-*.tar.gz \
             dist/family-vpn-panel-update-*.tar.gz.sha256 \
