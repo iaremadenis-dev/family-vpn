@@ -28,6 +28,16 @@ BACKUP_DIR=""
 WG_FILE=""
 AGENT_BIN="/usr/local/bin/family-vpn-agent"
 AGENT_BACKUP=""
+ROLE="direct"
+UPLINK_FILE=""
+PUBLIC_ADDRESS=""
+SERVER_NAME=""
+TRANSPORT_PORT="443"
+TRANSPORT_DIR="/etc/family-vpn/transport"
+TRANSPORT_BIN=""
+TRANSPORT_STAGE=""
+WIZARD_MODE=0
+WIZARD_TMP=""
 
 die() {
   echo "family-vpn-install: $*" >&2
@@ -41,6 +51,12 @@ cleanup() {
   fi
   if [ -n "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
+  fi
+  if [ -n "$TRANSPORT_STAGE" ]; then
+    rm -rf "$TRANSPORT_STAGE"
+  fi
+  if [ -n "$WIZARD_TMP" ]; then
+    rm -rf "$WIZARD_TMP"
   fi
   if [ "$status" -ne 0 ] && [ "$CREATED_WG" -eq 1 ] && [ ! -f "$DATA_DIR/wg-managed-by-installer" ]; then
     systemctl disable --now wg-quick@wg0 >/dev/null 2>&1 || true
@@ -332,7 +348,7 @@ EOF
 
 # UFW for a dedicated WG node. NAT/isolation stay in wg0 PostUp only (no duplicate MASQUERADE).
 configure_ufw_agent() {
-  local wan
+  local wan wg_port
   export DEBIAN_FRONTEND=noninteractive
   apt-get install -y ufw >/dev/null
   # Let WireGuard PostUp own filter FORWARD / NAT; UFW must not drop forwarded WG traffic.
@@ -344,7 +360,12 @@ configure_ufw_agent() {
   ufw default deny incoming >/dev/null 2>&1 || true
   ufw default allow outgoing >/dev/null 2>&1 || true
   ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || true
-  ufw allow 51820/udp comment 'family-vpn-wireguard' >/dev/null 2>&1 || ufw allow 51820/udp >/dev/null 2>&1 || true
+  wg_port=$(wg show wg0 listen-port 2>/dev/null || true)
+  if [ -z "$wg_port" ]; then
+    wg_port=$(describe_wg_conf /etc/wireguard/wg0.conf | sed -n 's/^listen_port=//p')
+  fi
+  [ -n "$wg_port" ] || die "WireGuard listen port not found"
+  ufw allow "$wg_port/udp" comment 'family-vpn-wireguard' >/dev/null
   wan=$(detect_wan_iface || true)
   if [ -n "$wan" ]; then
     # Route allowances are additive; they do not replace PostUp isolation DROP wg0→wg0.
@@ -353,7 +374,7 @@ configure_ufw_agent() {
   fi
   ufw --force enable >/dev/null
   ufw status | grep -qi 'Status: active' || die "ufw did not become active"
-  echo "family-vpn-install: UFW active (22/tcp, 51820/udp); NAT/isolation remain in wg0 PostUp"
+  echo "family-vpn-install: UFW active (22/tcp, $wg_port/udp); NAT/isolation remain in wg0 PostUp"
 }
 
 harden_fresh_agent_host() {
@@ -551,6 +572,466 @@ preflight() {
   echo "family-vpn-install $AGENT_VERSION preflight ok"
 }
 
+# Two-hop deployment uses this same installer twice. The exit does not need an agent.
+# Existing/default invocations retain the direct WireGuard installation path.
+transport_usage() {
+  cat <<'EOF'
+Interactive installation: sudo bash install.sh
+Choose the server role when asked. The foreign VPS prints a connection code to paste
+into the Russian VPS installer. Addresses and TLS settings are detected automatically.
+
+Two-hop installation (Ubuntu 24.04, run as root):
+  Foreign VPS:
+    bash install.sh --role exit --public-address FOREIGN_IPV4 --server-name TLS_HOST
+  Copy /etc/family-vpn/transport/uplink.json securely to the Russian VPS.
+  Russian VPS:
+    bash install.sh --role entry --uplink /root/uplink.json --backend https://PANEL
+
+TLS_HOST must be a reachable TLS 1.3 website supporting X25519.
+--transport-port defaults to 443. It must be free on the foreign VPS.
+An already paired entry agent is reused. Client .conf/QR issuance uses that entry.
+The entry keeps VPN forwarding blocked if the foreign transport fails.
+Repeat the same command to repair/restart the transport without rotating exit credentials.
+--preflight validates parameters without installing packages or changing networking.
+The original install and --update commands remain available with the default --role direct.
+EOF
+}
+
+wizard_read() {
+  read -r -p "$1" WIZARD_REPLY </dev/tty || die "input cancelled"
+}
+
+transport_export_code() {
+  python3 - "$TRANSPORT_DIR/uplink.json" <<'PY'
+import base64, json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+raw = json.dumps(data, separators=(",", ":")).encode()
+print("FVPN1." + base64.urlsafe_b64encode(raw).decode().rstrip("="))
+PY
+}
+
+transport_import_code() {
+  # The code is data, never evaluated. No credentials appear in command arguments/history.
+  python3 -c '
+import base64, json, pathlib, sys
+try:
+    code = sys.stdin.read().strip()
+    if not code.startswith("FVPN1.") or len(code) > 4096:
+        raise ValueError()
+    raw = code[6:]
+    data = json.loads(base64.b64decode(raw + "=" * (-len(raw) % 4), altchars=b"-_", validate=True))
+    pathlib.Path(sys.argv[1]).write_text(json.dumps(data), encoding="utf-8")
+except (ValueError, TypeError, OSError):
+    sys.exit("family-vpn-install: неверный код связи")
+' "$UPLINK_FILE" <<<"$WIZARD_REPLY"
+}
+
+transport_wizard() {
+  [ "$(id -u)" -eq 0 ] || die "запустите sudo bash install.sh"
+  assert_ubuntu_2404
+  [ -r /dev/tty ] || die "запустите скачанный файл командой sudo bash install.sh в терминале"
+  WIZARD_MODE=1
+  echo "Family VPN — настройка соединения через два сервера"
+  echo "1 — зарубежный сервер (установить первым)"
+  echo "2 — российский сервер, к которому подключается WireGuard"
+  if [ -f "$TRANSPORT_DIR/role" ]; then
+    ROLE=$(cat "$TRANSPORT_DIR/role")
+    case "$ROLE" in entry|exit) ;; *) die "unknown installed transport role" ;; esac
+    echo "Обнаружена существующая установка. Использую сохранённые параметры."
+  else
+    wizard_read "Какой это сервер? Введите 1 или 2: "
+    case "$WIZARD_REPLY" in
+      1) ROLE=exit ;;
+      2) ROLE=entry ;;
+      *) die "выберите 1 или 2" ;;
+    esac
+  fi
+  if ! command -v python3 >/dev/null || ! command -v curl >/dev/null \
+    || ! command -v openssl >/dev/null || ! command -v ss >/dev/null; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y
+    apt-get install -y python3 curl ca-certificates openssl iproute2
+  fi
+  if [ "$ROLE" = "exit" ]; then
+    if [ -f "$TRANSPORT_DIR/uplink.json" ]; then
+      PUBLIC_ADDRESS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["server"])' "$TRANSPORT_DIR/uplink.json")
+      SERVER_NAME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["server_name"])' "$TRANSPORT_DIR/uplink.json")
+      TRANSPORT_PORT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["server_port"])' "$TRANSPORT_DIR/uplink.json")
+      return
+    fi
+    local detected candidate
+    detected=$(ip -4 route get 1.1.1.1 | awk '{for(i=1;i<NF;i++) if($i=="src") {print $(i+1);exit}}')
+    if ! python3 -c 'import ipaddress,sys; sys.exit(not ipaddress.IPv4Address(sys.argv[1]).is_global)' "$detected" 2>/dev/null; then
+      detected=$(curl -4 -fsS --connect-timeout 5 --max-time 10 https://1.1.1.1/cdn-cgi/trace | sed -n 's/^ip=//p') || detected=""
+    fi
+    if [ -z "$detected" ]; then
+      wizard_read "Не удалось определить внешний IPv4. Введите IP этого VPS: "
+      detected=$WIZARD_REPLY
+    fi
+    PUBLIC_ADDRESS=$detected
+    echo "Адрес зарубежного сервера: $PUBLIC_ADDRESS"
+    TRANSPORT_PORT=""
+    for candidate in 443 8443 2053; do
+      if [ -z "$(ss -H -ltn "sport = :$candidate")" ]; then TRANSPORT_PORT=$candidate; break; fi
+    done
+    [ -n "$TRANSPORT_PORT" ] || die "порты 443, 8443 и 2053 заняты; требуется отдельный свободный порт"
+    echo "Проверяю параметры защищённого соединения…"
+    for candidate in www.microsoft.com www.cloudflare.com www.apple.com; do
+      if timeout 8 openssl s_client -connect "$candidate:443" -servername "$candidate" \
+        -tls1_3 -groups X25519 -verify_hostname "$candidate" -verify_return_error -brief \
+        </dev/null >/dev/null 2>&1; then
+        SERVER_NAME=$candidate
+        break
+      fi
+    done
+    [ -n "$SERVER_NAME" ] || die "не удалось найти доступный TLS-сервер; проверьте интернет на VPS"
+  else
+    if [ -f "$TRANSPORT_DIR/entry-uplink.json" ]; then
+      UPLINK_FILE="$TRANSPORT_DIR/entry-uplink.json"
+    else
+      wizard_read "Вставьте код связи, полученный на зарубежном сервере: "
+      WIZARD_TMP=$(mktemp -d)
+      UPLINK_FILE="$WIZARD_TMP/uplink.json"
+      transport_import_code
+      WIZARD_REPLY=""
+    fi
+    transport_validate
+    if ! agent_is_paired; then
+      BACKEND=${FAMILY_VPN_PUBLIC_URL:-}
+      if [ -z "$BACKEND" ] && [ -f /etc/systemd/system/family-vpn-agent.service ]; then
+        BACKEND=$(awk '/^ExecStart=/{for(i=1;i<NF;i++) if($i=="--backend") {print $(i+1);exit}}' /etc/systemd/system/family-vpn-agent.service)
+      fi
+      if [ -z "$BACKEND" ]; then
+        wizard_read "Введите HTTPS-адрес вашей действующей панели Family VPN: "
+        BACKEND=$WIZARD_REPLY
+      fi
+      normalize_backend
+    fi
+  fi
+}
+
+transport_validate() {
+  case "$ROLE" in direct|entry|exit) ;; *) die "role must be direct, entry or exit" ;; esac
+  case "$MODE" in install|preflight) ;; *) die "two-hop roles support install or --preflight" ;; esac
+  case "$TRANSPORT_PORT" in ''|*[!0-9]*) die "transport port must be numeric" ;; esac
+  [ "$TRANSPORT_PORT" -ge 1 ] && [ "$TRANSPORT_PORT" -le 65535 ] || die "transport port out of range"
+  if [ "$ROLE" = "exit" ]; then
+    [ -n "$PUBLIC_ADDRESS" ] && [ -n "$SERVER_NAME" ] || die "exit requires --public-address and --server-name"
+    [ -z "$UPLINK_FILE" ] || die "--uplink is for the entry role"
+  else
+    [ -f "$UPLINK_FILE" ] && [ ! -L "$UPLINK_FILE" ] || die "entry requires a regular --uplink JSON file"
+    [ -z "$PUBLIC_ADDRESS$SERVER_NAME" ] || die "exit address and TLS host come from --uplink"
+  fi
+  require_cmd python3
+  # Parse data as JSON, never as shell code. Reject extra fields and untrusted overrides.
+  python3 - "$ROLE" "$UPLINK_FILE" "$PUBLIC_ADDRESS" "$SERVER_NAME" <<'PY'
+import base64, ipaddress, json, re, sys, uuid
+role, filename, address, name = sys.argv[1:]
+def host(value):
+    if not isinstance(value, str) or len(value) > 253 or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", value):
+        raise ValueError("invalid TLS hostname")
+    if "." not in value or any(not label or len(label) > 63 for label in value.split(".")):
+        raise ValueError("invalid TLS hostname")
+try:
+    if role == "entry":
+        with open(filename, encoding="utf-8") as f:
+            p = json.load(f)
+        fields = {"version", "server", "server_port", "uuid", "server_name", "public_key", "short_id"}
+        if not isinstance(p, dict) or set(p) != fields or type(p["version"]) is not int or p["version"] != 1:
+            raise ValueError("unsupported uplink file")
+        address, name = p["server"], p["server_name"]
+        if type(p["server_port"]) is not int or not 1 <= p["server_port"] <= 65535:
+            raise ValueError("invalid uplink port")
+        uuid.UUID(p["uuid"])
+        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", p["public_key"]):
+            raise ValueError("invalid REALITY public key")
+        if len(base64.urlsafe_b64decode(p["public_key"] + "=")) != 32:
+            raise ValueError("invalid REALITY public key")
+        if not re.fullmatch(r"[0-9a-f]{8}", p["short_id"]):
+            raise ValueError("invalid REALITY short ID")
+    ip = ipaddress.IPv4Address(address)
+    if not ip.is_global:
+        raise ValueError("exit must have a public IPv4 address")
+    host(name)
+except (ValueError, TypeError, KeyError, OSError) as e:
+    sys.exit("family-vpn-install: invalid transport parameters (" + type(e).__name__ + ")")
+PY
+}
+
+transport_dependencies() {
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y ca-certificates curl python3 iproute2 iptables openssl util-linux
+  if ! command -v sing-box >/dev/null; then
+    # Official signed APT repository. No downloaded shell script is executed.
+    install -d -m 755 /etc/apt/keyrings
+    curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
+    chmod 644 /etc/apt/keyrings/sagernet.asc
+    cat >/etc/apt/sources.list.d/family-vpn-sagernet.sources <<'EOF'
+Types: deb
+URIs: https://deb.sagernet.org/
+Suites: *
+Components: *
+Enabled: yes
+Signed-By: /etc/apt/keyrings/sagernet.asc
+EOF
+    apt-get update -y
+    apt-get install -y sing-box
+  fi
+  TRANSPORT_BIN=$(command -v sing-box)
+}
+
+transport_render() {
+  # Generated files contain credentials and are created under umask 077.
+  if [ "$ROLE" = "entry" ]; then
+    ip -j -4 route show table all >"$TRANSPORT_STAGE/routes.json"
+  fi
+  python3 - "$ROLE" "$TRANSPORT_STAGE" "$TRANSPORT_DIR" "$UPLINK_FILE" \
+    "$PUBLIC_ADDRESS" "$SERVER_NAME" "$TRANSPORT_PORT" "$TRANSPORT_BIN" <<'PY'
+import ipaddress, json, pathlib, re, secrets, subprocess, sys, uuid
+role, stage, state, uplink, address, name, port, binary = sys.argv[1:]
+stage, state = pathlib.Path(stage), pathlib.Path(state)
+def write(name, obj):
+    (stage / name).write_text(json.dumps(obj, indent=2) + "\n", encoding="utf-8")
+if role == "exit":
+    if (state / "config.json").exists():
+        config = json.loads((state / "config.json").read_text())
+        params = json.loads((state / "uplink.json").read_text())
+        if (params["server"], params["server_name"], params["server_port"]) != (address, name, int(port)):
+            sys.exit("family-vpn-install: exit already configured with different parameters")
+    else:
+        pair = subprocess.check_output([binary, "generate", "reality-keypair"], text=True)
+        private = re.search(r"PrivateKey:\s*(\S+)", pair).group(1)
+        public = re.search(r"PublicKey:\s*(\S+)", pair).group(1)
+        params = dict(version=1, server=address, server_port=int(port), uuid=str(uuid.uuid4()),
+                      server_name=name, public_key=public, short_id=secrets.token_hex(4))
+        config = {
+            "log": {"level": "warn"},
+            "inbounds": [{"type": "vless", "tag": "entry", "listen": "0.0.0.0", "listen_port": int(port),
+                "users": [{"uuid": params["uuid"], "flow": "xtls-rprx-vision"}],
+                "tls": {"enabled": True, "server_name": name, "reality": {"enabled": True,
+                    "handshake": {"server": name, "server_port": 443},
+                    "private_key": private, "short_id": [params["short_id"]]}}}],
+            "outbounds": [{"type": "direct", "tag": "internet"}],
+            "route": {"final": "internet"}}
+    write("uplink.json", params)
+else:
+    params = json.loads(pathlib.Path(uplink).read_text())
+    # Only wg0 traffic is policy-routed to this TUN. The host default route stays usable for management.
+    used = json.loads((stage / "routes.json").read_text())
+    networks = [ipaddress.ip_network(r["dst"], strict=False) for r in used
+                if r.get("dst") not in (None, "default") and r.get("dev") != "fvpn-tun"]
+    tun = None
+    for candidate in ("172.31.255.1/30", "198.18.255.1/30", "10.254.255.1/30"):
+        if not any(ipaddress.ip_interface(candidate).network.overlaps(n) for n in networks):
+            tun = candidate
+            break
+    if tun is None:
+        sys.exit("family-vpn-install: no free TUN subnet")
+    config = {
+        "log": {"level": "warn"},
+        "inbounds": [{"type": "tun", "tag": "vpn", "interface_name": "fvpn-tun",
+            "address": [tun], "mtu": 1400, "auto_route": False, "stack": "system"}],
+        "outbounds": [{"type": "vless", "tag": "foreign", "server": params["server"],
+            "server_port": params["server_port"], "uuid": params["uuid"], "flow": "xtls-rprx-vision",
+            "packet_encoding": "xudp", "tls": {"enabled": True, "server_name": params["server_name"],
+                "utls": {"enabled": True, "fingerprint": "chrome"},
+                "reality": {"enabled": True, "public_key": params["public_key"], "short_id": params["short_id"]}}}],
+        "route": {"final": "foreign"}}
+write("config.json", config)
+PY
+  "$TRANSPORT_BIN" check -c "$TRANSPORT_STAGE/config.json"
+}
+
+transport_write_guard() {
+  local network=$1
+  cat <<EOF
+#!/bin/bash
+set -euo pipefail
+# These guards intentionally persist when sing-box stops. No direct fallback.
+iptables -w -N FVPN_EGRESS 2>/dev/null || true
+iptables -w -C FVPN_EGRESS -i wg0 -j DROP 2>/dev/null || iptables -w -A FVPN_EGRESS -i wg0 -j DROP
+iptables -w -C FVPN_EGRESS -i wg0 -o fvpn-tun -j ACCEPT 2>/dev/null || iptables -w -I FVPN_EGRESS 1 -i wg0 -o fvpn-tun -j ACCEPT
+iptables -w -C FVPN_EGRESS -i fvpn-tun -o wg0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -w -I FVPN_EGRESS 1 -i fvpn-tun -o wg0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -w -C FORWARD -j FVPN_EGRESS 2>/dev/null || iptables -w -I FORWARD 1 -j FVPN_EGRESS
+# Client profiles currently provide IPv4 addresses only. Explicitly block forwarded IPv6.
+ip6tables -w -C FORWARD -i wg0 -j DROP 2>/dev/null || ip6tables -w -I FORWARD 1 -i wg0 -j DROP
+ip -4 route replace unreachable default metric 32767 table 51821
+if ! ip -4 rule show | grep -Eq '^10518:.*from ${network//./\\.} .*lookup 51821'; then
+  if ip -4 rule show | grep -q '^10518:'; then
+    echo 'family-vpn: policy priority 10518 already in use' >&2
+    exit 1
+  fi
+  ip -4 rule add priority 10518 from $network table 51821
+fi
+EOF
+}
+
+transport_entry_guard() {
+  local network
+  network=$(describe_wg_conf /etc/wireguard/wg0.conf | sed -n 's/^subnet=//p')
+  [ -n "$network" ] || die "wg0 IPv4 subnet not found"
+  install -d -m 755 /usr/local/lib/family-vpn /etc/systemd/system/wg-quick@wg0.service.d
+  transport_write_guard "$network" >/usr/local/lib/family-vpn/egress-guard.sh
+  chmod 700 /usr/local/lib/family-vpn/egress-guard.sh
+  cat >/etc/systemd/system/family-vpn-egress-guard.service <<'EOF'
+[Unit]
+Description=Family VPN fail-closed forwarding
+Before=wg-quick@wg0.service family-vpn-transport.service
+After=network-pre.target ufw.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/family-vpn/egress-guard.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat >/etc/systemd/system/wg-quick@wg0.service.d/family-vpn-egress.conf <<'EOF'
+[Unit]
+Requires=family-vpn-egress-guard.service
+After=family-vpn-egress-guard.service
+EOF
+  systemctl daemon-reload
+  systemctl enable family-vpn-egress-guard.service
+  systemctl restart family-vpn-egress-guard.service
+}
+
+transport_start() {
+  local previous=0 was_active=0
+  if [ -f "$TRANSPORT_DIR/config.json" ]; then
+    install -m 600 "$TRANSPORT_DIR/config.json" "$TRANSPORT_STAGE/previous.json"
+    previous=1
+  fi
+  if [ "$ROLE" = "exit" ]; then
+    # Save the matching export before starting so an interrupted first install is repairable.
+    install -m 600 "$TRANSPORT_STAGE/uplink.json" "$TRANSPORT_DIR/uplink.json.next"
+    mv -f "$TRANSPORT_DIR/uplink.json.next" "$TRANSPORT_DIR/uplink.json"
+  fi
+  systemctl is-active --quiet family-vpn-transport && was_active=1
+  install -m 600 "$TRANSPORT_STAGE/config.json" "$TRANSPORT_DIR/config.json.next"
+  mv -f "$TRANSPORT_DIR/config.json.next" "$TRANSPORT_DIR/config.json"
+  cat >/etc/systemd/system/family-vpn-transport.service <<EOF
+[Unit]
+Description=Family VPN $ROLE transport
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+EOF
+  if [ "$ROLE" = "entry" ]; then
+    cat >>/etc/systemd/system/family-vpn-transport.service <<'EOF'
+Requires=family-vpn-egress-guard.service
+After=family-vpn-egress-guard.service
+EOF
+  fi
+  cat >>/etc/systemd/system/family-vpn-transport.service <<EOF
+
+[Service]
+Type=simple
+ExecStart=$TRANSPORT_BIN run -c $TRANSPORT_DIR/config.json
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+EOF
+  if [ "$ROLE" = "entry" ]; then
+    cat >>/etc/systemd/system/family-vpn-transport.service <<'EOF'
+ExecStartPost=/bin/bash -c 'for n in {1..50}; do ip link show fvpn-tun >/dev/null 2>&1 && exec ip -4 route replace default dev fvpn-tun metric 1 table 51821; sleep 0.1; done; exit 1'
+EOF
+  fi
+  cat >>/etc/systemd/system/family-vpn-transport.service <<'EOF'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  local started=0
+  if systemctl restart family-vpn-transport; then
+    sleep 2
+    if systemctl is-active --quiet family-vpn-transport; then started=1; fi
+  fi
+  if [ "$started" -ne 1 ]; then
+    if [ "$previous" -eq 1 ]; then
+      install -m 600 "$TRANSPORT_STAGE/previous.json" "$TRANSPORT_DIR/config.json.next"
+      mv -f "$TRANSPORT_DIR/config.json.next" "$TRANSPORT_DIR/config.json"
+      if [ "$was_active" -eq 1 ]; then systemctl restart family-vpn-transport || true; fi
+    fi
+    die "transport failed to start; entry forwarding stays fail-closed; retry after checking journalctl -u family-vpn-transport"
+  fi
+  systemctl enable family-vpn-transport
+}
+
+install_transport() {
+  [ "$(id -u)" -eq 0 ] || die "run as root"
+  assert_ubuntu_2404
+  transport_validate
+  require_cmd flock
+  exec 9>/run/lock/family-vpn-transport.lock
+  flock -n 9 || die "another transport installation is running"
+  [ ! -L "$TRANSPORT_DIR" ] || die "transport directory must not be a symlink"
+  if [ -f "$TRANSPORT_DIR/role" ]; then
+    [ "$(cat "$TRANSPORT_DIR/role")" = "$ROLE" ] || die "this host already has a different transport role"
+  elif [ -e "$TRANSPORT_DIR/config.json" ] || [ -e /etc/systemd/system/family-vpn-transport.service ]; then
+    die "unmanaged transport files found; inspect them before installing"
+  fi
+  if [ "$ROLE" = "entry" ] && [ ! -f "$TRANSPORT_DIR/role" ]; then
+    if ip -4 rule show | grep -Eq '^10518:|lookup 51821( |$)' \
+      || [ -n "$(ip -4 route show table 51821 2>/dev/null)" ] \
+      || ip link show fvpn-tun >/dev/null 2>&1 \
+      || iptables -w -S FVPN_EGRESS >/dev/null 2>&1; then
+      die "entry routing identifiers already in use (10518/51821/fvpn-tun/FVPN_EGRESS)"
+    fi
+  fi
+  transport_dependencies
+  TRANSPORT_STAGE=$(mktemp -d)
+  transport_render
+  if [ "$ROLE" = "exit" ]; then
+    # Refuse a port owned by another service, including an existing panel on 443.
+    if ! systemctl is-active --quiet family-vpn-transport && [ -n "$(ss -H -ltn "sport = :$TRANSPORT_PORT")" ]; then
+      die "transport TCP port is occupied; choose --transport-port"
+    fi
+    timeout 15 openssl s_client -connect "$SERVER_NAME:443" -servername "$SERVER_NAME" \
+      -tls1_3 -groups X25519 -verify_hostname "$SERVER_NAME" -verify_return_error -brief </dev/null \
+      >/dev/null 2>&1 || die "TLS host must accept verified TLS 1.3 with X25519"
+  fi
+  install -d -m 700 "$TRANSPORT_DIR"
+  printf '%s\n' "$ROLE" >"$TRANSPORT_DIR/role"
+  if [ "$ROLE" = "entry" ]; then transport_entry_guard; fi
+  transport_start
+  if [ "$ROLE" = "exit" ]; then
+    if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then
+      ufw allow "$TRANSPORT_PORT/tcp" comment 'family-vpn-transport'
+    fi
+    if [ "$WIZARD_MODE" -eq 0 ]; then
+      echo "family-vpn-install: exit ready; securely copy $TRANSPORT_DIR/uplink.json to the entry VPS (contains access credentials)"
+    fi
+    echo "family-vpn-install: allow TCP $TRANSPORT_PORT in the hosting provider firewall"
+  else
+    install -m 600 "$UPLINK_FILE" "$TRANSPORT_DIR/entry-uplink.json.next"
+    mv -f "$TRANSPORT_DIR/entry-uplink.json.next" "$TRANSPORT_DIR/entry-uplink.json"
+    echo "family-vpn-install: entry transport running; forwarding is limited to fvpn-tun"
+  fi
+}
+
+transport_probe() {
+  local host_address
+  host_address=$(ip -o -4 addr show dev wg0 | awk '{split($4, a, "/"); print a[1]; exit}')
+  [ -n "$host_address" ] || die "entry wg0 is down; forwarding stays fail-closed"
+  curl -4 -fsS --interface "$host_address" --connect-timeout 10 --max-time 20 \
+    https://1.1.1.1/cdn-cgi/trace -o "$TRANSPORT_STAGE/probe.txt" \
+    || die "entry installed but HTTPS through the foreign exit failed; forwarding stays fail-closed"
+  grep -q '^ip=' "$TRANSPORT_STAGE/probe.txt" || die "foreign exit probe returned an unexpected response"
+  echo "family-vpn-install: foreign exit HTTPS probe passed"
+}
+
+# Installer entry point.
+if [ "$#" -eq 0 ]; then
+  transport_wizard
+fi
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --backend) BACKEND=${2:-}; shift 2 ;;
@@ -560,6 +1041,12 @@ while [ "$#" -gt 0 ]; do
     --port) PORT=${2:-}; shift 2 ;;
     --subnet) SUBNET=${2:-}; SUBNET_SET=1; shift 2 ;;
     --data) DATA_DIR=${2:-}; shift 2 ;;
+    --role) ROLE=${2:-}; shift 2 ;;
+    --uplink) UPLINK_FILE=${2:-}; shift 2 ;;
+    --public-address) PUBLIC_ADDRESS=${2:-}; shift 2 ;;
+    --server-name) SERVER_NAME=${2:-}; shift 2 ;;
+    --transport-port) TRANSPORT_PORT=${2:-}; shift 2 ;;
+    -h|--help) transport_usage; exit 0 ;;
     --self-check) MODE="self-check"; shift ;;
     --preflight) MODE="preflight"; shift ;;
     --check) MODE="check"; shift ;;
@@ -570,6 +1057,40 @@ while [ "$#" -gt 0 ]; do
     *) die "unknown argument" ;;
   esac
 done
+
+case "$ROLE" in direct|entry|exit) ;; *) die "role must be direct, entry or exit" ;; esac
+if [ "$ROLE" != "direct" ]; then
+  transport_validate
+  if [ "$MODE" = "preflight" ]; then
+    [ "$(id -u)" -eq 0 ] || die "run as root"
+    assert_ubuntu_2404
+    echo "family-vpn-install: $ROLE parameters valid; network reachability is not tested by --preflight"
+    exit 0
+  fi
+  if [ "$ROLE" = "exit" ]; then
+    install_transport
+    if [ "$WIZARD_MODE" -eq 1 ]; then
+      echo ""
+      echo "Зарубежный сервер настроен. На российском запустите тот же установщик и выберите 2."
+      echo "Скопируйте код ниже и вставьте его в установщик российского сервера:"
+      transport_export_code
+      echo "Код даёт доступ к вашему выходному серверу. Храните его как VPN-конфигурацию."
+    fi
+    exit 0
+  fi
+  if agent_is_paired; then
+    [ -f /etc/wireguard/wg0.conf ] || die "paired entry is missing wg0.conf"
+    install_transport
+    if ! wg show wg0 >/dev/null 2>&1; then
+      systemctl enable --now wg-quick@wg0
+    fi
+    transport_probe
+    echo "family-vpn-install: paired entry configured; existing agent identity reused"
+    exit 0
+  fi
+elif [ -n "$UPLINK_FILE$PUBLIC_ADDRESS$SERVER_NAME" ]; then
+  die "transport parameters require --role entry or --role exit"
+fi
 
 if [ "$MODE" = "self-check" ]; then
   self_check
@@ -670,6 +1191,13 @@ if [ "$(wg_plan /etc/wireguard/wg0.conf)" = "preserve" ]; then
   describe_wg_conf /etc/wireguard/wg0.conf
   echo "family-vpn-install: existing wg0 left unchanged"
   echo "family-vpn-install: server key, peers, listen port, subnet, and network rules were not modified"
+  if [ "$ROLE" = "entry" ]; then
+    harden_fresh_agent_host
+    install_transport
+    if ! wg show wg0 >/dev/null 2>&1; then
+      systemctl enable --now wg-quick@wg0
+    fi
+  fi
 else
   require_cmd apt-get
   export DEBIAN_FRONTEND=noninteractive
@@ -710,6 +1238,13 @@ EOF
   TMP_KEYS=""
   printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-family-vpn.conf
   sysctl -w net.ipv4.ip_forward=1 >/dev/null
+  if [ "$ROLE" = "entry" ]; then
+    # Keep this subnet/config on a partial install: the persistent policy rule refers to it.
+    : > "$DATA_DIR/wg-managed-by-installer"
+    # Finish UFW reloads before installing the guard and bringing up new clients.
+    harden_fresh_agent_host
+    install_transport
+  fi
   # The unit starts wg0 now and again after reboot. A separate wg-quick up leaves the unit inactive.
   systemctl daemon-reload
   systemctl enable --now wg-quick@wg0
@@ -725,7 +1260,11 @@ systemctl daemon-reload
 /usr/local/bin/family-vpn-agent enroll --backend "$BACKEND" --data "$DATA_DIR"
 systemctl enable --now family-vpn-agent
 # Host firewall/SSH hardening for new installs only (skipped by --update above).
-harden_fresh_agent_host
+if [ "$ROLE" = "entry" ]; then
+  transport_probe
+else
+  harden_fresh_agent_host
+fi
 post_install_check
 echo "family-vpn-install: agent service is enabled"
 echo "family-vpn-install: enter the pairing code in Servers → Add server"
