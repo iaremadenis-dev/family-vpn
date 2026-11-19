@@ -156,63 +156,7 @@ done
 
 transport_write_guard 10.221.0.0/24 >"$TEST_DIR/guard.sh"
 bash -n "$TEST_DIR/guard.sh"
-grep -q '^ExecStartPost=/usr/local/lib/family-vpn/egress-guard.sh
-grep -q 'unreachable default metric 32767 table 51821' "$TEST_DIR/guard.sh"
-grep -q 'priority 10518 from 10.221.0.0/24 table 51821' "$TEST_DIR/guard.sh"
-grep -q 'FVPN_EGRESS -i wg0 -j DROP' "$TEST_DIR/guard.sh"
-grep -q 'FVPN_EGRESS -i wg0 -o fvpn-tun -j ACCEPT' "$TEST_DIR/guard.sh"
-grep -q 'ip6tables.*FORWARD -i wg0 -j DROP' "$TEST_DIR/guard.sh"
-if grep -Eq 'MASQUERADE|ip route flush|iptables.*-F' "$TEST_DIR/guard.sh"; then
-  echo "guard must not create a direct fallback or flush host rules" >&2
-  exit 1
-fi
-
-# Exercise service-start failure with paths redirected into the temporary fixture.
-sed "s|/etc/systemd/system|$TEST_DIR/units|g" "$TEST_DIR/functions.sh" >"$TEST_DIR/failure-functions.sh"
-(
-  source "$TEST_DIR/failure-functions.sh"
-  trap - EXIT
-  TRANSPORT_DIR="$TEST_DIR/state"
-  TRANSPORT_STAGE="$TEST_DIR/entry"
-  TRANSPORT_BIN=/usr/bin/sing-box
-  ROLE=entry
-  mkdir -p "$TEST_DIR/units"
-  cp "$TEST_DIR/state/config.json" "$TEST_DIR/before.json"
-  systemctl() {
-    if [ "$1" = restart ]; then return 1; fi
-    return 0
-  }
-  transport_start
-) >"$TEST_DIR/failure.log" 2>&1 && {
-  echo "service-start failure must be reported" >&2
-  exit 1
-}
-cmp "$TEST_DIR/before.json" "$TEST_DIR/state/config.json"
-grep -q 'transport failed to start' "$TEST_DIR/failure.log"
-
-# A non-default WireGuard port must be opened, including before the interface starts.
-sed "s|/etc/default/ufw|$TEST_DIR/ufw-default|g" "$TEST_DIR/functions.sh" >"$TEST_DIR/ufw-functions.sh"
-(
-  source "$TEST_DIR/ufw-functions.sh"
-  trap - EXIT
-  apt-get() { return 0; }
-  wg() { return 1; }
-  describe_wg_conf() { printf 'listen_port=51999\n'; }
-  detect_wan_iface() { printf 'eth0\n'; }
-  ufw() {
-    printf '%s\n' "$*" >>"$TEST_DIR/ufw.log"
-    if [ "$1" = status ]; then printf 'Status: active\n'; fi
-    return 0
-  }
-  configure_ufw_agent
-)
-grep -q 'allow 51999/udp' "$TEST_DIR/ufw.log"
-if grep -q 'allow 51820/udp' "$TEST_DIR/ufw.log"; then
-  echo "UFW opened the template port instead of the configured port" >&2
-  exit 1
-fi
-echo "transport configuration, credential reuse, input rejection and rollback checks ok"
- "$ROOT/installer/install.sh"
+grep -Fxq 'ExecStartPost=/usr/local/lib/family-vpn/egress-guard.sh' "$ROOT/installer/install.sh"
 grep -Fq 'route replace 10.221.0.0/24 dev wg0 scope link metric 1 table 51821' "$TEST_DIR/guard.sh"
 grep -q 'unreachable default metric 32767 table 51821' "$TEST_DIR/guard.sh"
 grep -q 'priority 10518 from 10.221.0.0/24 table 51821' "$TEST_DIR/guard.sh"
