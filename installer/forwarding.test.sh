@@ -14,7 +14,7 @@ source "$fixture/functions.sh"
 entry="fvpn-entry-$$"
 client="fvpn-client-$$"
 target="fvpn-target-$$"
-site="fvpn-site-$"
+site="fvpn-site-$$"
 exit_pid=""
 dns_pid=""
 https_pid=""
@@ -93,6 +93,16 @@ ip netns exec "$entry" iptables -A INPUT -p udp --dport 51820 -j ACCEPT
   transport_write_guard 10.220.0.0/24 >"$fixture/boot-guard.sh"
   ip netns exec "$boot" bash "$fixture/boot-guard.sh"
   ip -n "$boot" route show table 51821 | grep -q '^unreachable 10.220.0.0/24'
+  ip netns exec "$boot" iptables -I FORWARD 1 -j DROP
+  ip netns exec "$boot" sysctl -qw net.ipv4.ip_forward=0
+  ip netns exec "$boot" bash "$fixture/boot-guard.sh"
+  ip netns exec "$boot" bash "$fixture/boot-guard.sh"
+  [ "$(ip netns exec "$boot" sysctl -n net.ipv4.ip_forward)" = 1 ]
+  rules=$(ip netns exec "$boot" iptables -S FORWARD)
+  [ "$(grep -Fxc -- '-A FORWARD -j FVPN_EGRESS' <<<"$rules")" = 1 ]
+  [ "$(ip netns exec "$boot" iptables -S FORWARD 1)" = '-A FORWARD -j FVPN_EGRESS' ]
+  ip netns exec "$boot" iptables -C FORWARD -j DROP
+  echo "repair restored forwarding and guard order without deleting the existing firewall rule"
   for attempt in 1 2; do
     ip -n "$boot" link add wg0 type wireguard
     ip -n "$boot" address add 10.220.0.1/24 dev wg0
@@ -215,11 +225,11 @@ printf '127.0.0.1 localhost\n198.51.100.2 cover.test\n' >"$ns_files/hosts"
 printf 'nameserver 198.51.100.2\n' >"$ns_files/resolv.conf"
 ip netns exec "$site" dnsmasq --keep-in-foreground --no-resolv --no-hosts \
   --bind-interfaces --listen-address=198.51.100.2 --pid-file= \
-  --address=/probe.test/198.51.100.2 --address=/cover.test/198.51.100.2 >"$fixture/dns.log" 2>&1 &
+  --address=/example.com/198.51.100.2 --address=/probe.test/198.51.100.2 --address=/cover.test/198.51.100.2 >"$fixture/dns.log" 2>&1 &
 dns_pid=$!
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=probe.test' \
-  -addext 'subjectAltName=DNS:cover.test,DNS:probe.test' \
+  -addext 'subjectAltName=DNS:cover.test,DNS:probe.test,IP:198.51.100.2' \
   -keyout "$fixture/tls.key" -out "$fixture/tls.crt" 2>/dev/null
 cat >"$fixture/https.py" <<'PY'
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -229,6 +239,8 @@ import sys
 class Probe(BaseHTTPRequestHandler):
     def do_GET(self):
         data = (self.client_address[0] + "\n").encode() + bytes(range(256)) * 256
+        if self.path == "/cdn-cgi/trace":
+            data = ("ip=" + self.client_address[0] + "\n").encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -286,6 +298,25 @@ import sys
 assert Path(sys.argv[1]).read_bytes() == b"198.51.100.1\n" + bytes(range(256)) * 256
 PY
 echo "client verified TLS, exit source address and the full 64 KiB response"
+# Run the same automatic client check the installer runs on an existing entry.
+# A previous interrupted run owns only its temporary key and namespace.
+ip netns exec "$entry" wg show wg0 allowed-ips >"$fixture/allowed.before"
+old_ns="fvpca6b7223c01"
+ip netns add "$old_ns"
+old_key=$(wg genkey | wg pubkey)
+ip netns exec "$entry" wg set wg0 peer "$old_key" allowed-ips 10.220.0.246/31
+printf '{"ns":"%s","public":"%s"}\n' "$old_ns" "$old_key" >"$fixture/probe-state.json"
+real_client_check() {
+  ip netns exec "$entry" env CURL_CA_BUNDLE="$fixture/tls.crt" bash -c '
+    source "$1"
+    transport_client_probe 198.51.100.2 https://198.51.100.2/cdn-cgi/trace 198.51.100.1 "$2"
+  ' bash "$fixture/functions.sh" "$fixture/probe-state.json"
+}
+real_client_check | tee "$fixture/probe-ok.log"
+grep -q 'HTTPS OK, внешний IPv4 198.51.100.1' "$fixture/probe-ok.log"
+grep -q 'WireGuard OK, DNS OK' "$fixture/probe-ok.log"
+[ ! -e "$fixture/probe-state.json" ] && [ ! -e "/run/netns/$old_ns" ]
+ip netns exec "$entry" wg show wg0 allowed-ips | cmp "$fixture/allowed.before" -
 kill "$exit_pid"
 wait "$exit_pid" || true
 exit_pid=""
@@ -294,3 +325,12 @@ if fetch_site >/dev/null 2>&1; then
   exit 1
 fi
 echo "stopping only the foreign exit breaks client HTTPS as expected"
+if real_client_check >"$fixture/probe-broken.log" 2>&1; then
+  echo "automatic client check falsely passed with the exit stopped" >&2
+  exit 1
+fi
+grep -q 'WireGuard OK, DNS СБОЙ' "$fixture/probe-broken.log"
+grep -q 'HTTPS от тестового клиента' "$fixture/probe-broken.log"
+[ ! -e "$fixture/probe-state.json" ]
+ip netns exec "$entry" wg show wg0 allowed-ips | cmp "$fixture/allowed.before" -
+echo "real client probe identified a broken exit and cleaned up after both outcomes"

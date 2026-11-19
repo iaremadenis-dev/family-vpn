@@ -864,7 +864,14 @@ iptables -w -N FVPN_EGRESS 2>/dev/null || true
 iptables -w -C FVPN_EGRESS -i wg0 -j DROP 2>/dev/null || iptables -w -A FVPN_EGRESS -i wg0 -j DROP
 iptables -w -C FVPN_EGRESS -i wg0 -o fvpn-tun -j ACCEPT 2>/dev/null || iptables -w -I FVPN_EGRESS 1 -i wg0 -o fvpn-tun -j ACCEPT
 iptables -w -C FVPN_EGRESS -i fvpn-tun -o wg0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -w -I FVPN_EGRESS 1 -i fvpn-tun -o wg0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -w -C FORWARD -j FVPN_EGRESS 2>/dev/null || iptables -w -I FORWARD 1 -j FVPN_EGRESS
+if [ "\$(iptables -w -S FORWARD 1 2>/dev/null || true)" != '-A FORWARD -j FVPN_EGRESS' ]; then
+  if iptables -w -C FORWARD -j FVPN_EGRESS 2>/dev/null; then
+    # Move only our jump in one transaction, keeping unrelated firewall rules intact.
+    printf '%s\n' '*filter' '-D FORWARD -j FVPN_EGRESS' '-I FORWARD 1 -j FVPN_EGRESS' 'COMMIT' | iptables-restore -w --noflush
+  else
+    iptables -w -I FORWARD 1 -j FVPN_EGRESS
+  fi
+fi
 # Client profiles currently provide IPv4 addresses only. Explicitly block forwarded IPv6.
 ip6tables -w -C FORWARD -i wg0 -j DROP 2>/dev/null || ip6tables -w -I FORWARD 1 -i wg0 -j DROP
 ip -4 route replace unreachable default metric 32767 table 51821
@@ -880,6 +887,10 @@ if ! ip -4 rule show | grep -Eq '^10518:.*from ${network//./\\.} .*lookup 51821'
     exit 1
   fi
   ip -4 rule add priority 10518 from $network table 51821
+fi
+# Enable forwarding only after the fail-closed routes and filtering are in place.
+if [ "\$(sysctl -n net.ipv4.ip_forward)" != 1 ]; then
+  sysctl -qw net.ipv4.ip_forward=1
 fi
 EOF
 }
@@ -1066,7 +1077,144 @@ PY
     # A VPS may legitimately send traffic from a different address behind provider NAT.
     echo "family-vpn-install: HTTPS from the entry returned IPv4 $observed; configured endpoint is $expected. Exit IP unconfirmed." >&2
   fi
-  echo "family-vpn-install: the phone's WireGuard connection and client DNS require a separate client check"
+}
+
+# Use the real wg0 and the installed uplink. The encrypted hop stays on this VPS.
+transport_client_probe() {
+  python3 - "$@" <<'PY'
+import ipaddress, json, os, pathlib, re, secrets, signal, subprocess, sys
+
+resolver, trace_url, expected, journal_path = sys.argv[1:]
+journal = pathlib.Path(journal_path)
+def run(*args, data=None):
+    return subprocess.run(args, input=data, stdout=subprocess.PIPE, check=True).stdout
+def wg_value(field):
+    return run("wg", "show", "wg0", field).decode().strip()
+def cleanup(state):
+    ns, key = state["ns"], state["public"]
+    if not re.fullmatch(r"fvpc[0-9a-f]{10}", ns) or not re.fullmatch(r"[A-Za-z0-9+/]{43}=", key):
+        raise RuntimeError("invalid client-check recovery state")
+    # This key is generated for this probe only. Production peers retain their /32s.
+    if key in wg_value("peers").split():
+        run("wg", "set", "wg0", "peer", key, "remove")
+    if pathlib.Path("/run/netns", ns).exists():
+        run("ip", "netns", "delete", ns)
+    if pathlib.Path("/sys/class/net", ns).exists():
+        run("ip", "link", "delete", ns)
+    journal.unlink(missing_ok=True)
+
+def probe():
+    if journal.exists():
+        cleanup(json.loads(journal.read_text()))
+    addresses = json.loads(run("ip", "-j", "-4", "addr", "show"))
+    wgaddrs = [a for dev in addresses if dev["ifname"] == "wg0" for a in dev["addr_info"] if a["family"] == "inet"]
+    if len(wgaddrs) != 1:
+        raise RuntimeError("проверке требуется один IPv4-адрес на wg0")
+    subnet = ipaddress.ip_interface(f"{wgaddrs[0]['local']}/{wgaddrs[0]['prefixlen']}").network
+    used = [ipaddress.ip_network(a["local"]) for dev in addresses for a in dev["addr_info"] if a["family"] == "inet"]
+    for line in wg_value("allowed-ips").splitlines():
+        for value in line.replace(",", " ").split()[1:]:
+            if value != "(none)":
+                net = ipaddress.ip_network(value)
+                if net.version == 4:
+                    used.append(net)
+    # The panel assigns /32s. A concurrent new client always takes precedence over our /31.
+    # Consider at most 128 pairs and exclude both the network and broadcast addresses.
+    for high in range(int(subnet.broadcast_address)-2, max(int(subnet.network_address)+1, int(subnet.broadcast_address)-258), -2):
+        pair = ipaddress.ip_network((high, 31), strict=False)
+        if not any(pair.overlaps(other) for other in used):
+            break
+    else:
+        print("Проверка тестовым клиентом пропущена: в подсети нет подходящей свободной пары адресов.")
+        return
+    source = str(pair.broadcast_address)
+    route = run("ip", "-j", "-4", "route", "get", resolver, "from", source, "iif", "wg0")
+    if json.loads(route)[0].get("dev") != "fvpn-tun":
+        raise RuntimeError("маршрут запроса клиента с wg0 ведёт мимо fvpn-tun")
+    target_key, port = wg_value("public-key"), wg_value("listen-port")
+    private = run("wg", "genkey")
+    key = run("wg", "pubkey", data=private).decode().strip()
+    ns = "fvpc" + secrets.token_hex(5)
+    if pathlib.Path("/run/netns", ns).exists() or pathlib.Path("/sys/class/net", ns).exists():
+        raise RuntimeError("имя временного интерфейса занято")
+    state = {"ns": ns, "public": key}
+    tmp = journal.with_suffix(".next")
+    tmp.write_text(json.dumps(state))
+    os.replace(tmp, journal)
+    try:
+        run("ip", "netns", "add", ns)
+        run("ip", "link", "add", ns, "type", "wireguard")
+        run("wg", "set", ns, "private-key", "/dev/stdin", "peer", target_key,
+            "allowed-ips", "0.0.0.0/0", "endpoint", "127.0.0.1:" + port, data=private)
+        del private
+        run("ip", "link", "set", ns, "netns", ns)
+        run("ip", "-n", ns, "addr", "add", source + "/32", "dev", ns)
+        run("ip", "-n", ns, "link", "set", ns, "mtu", "1280", "up")
+        run("ip", "-n", ns, "route", "add", "default", "dev", ns)
+        run("wg", "set", "wg0", "peer", key, "allowed-ips", str(pair))
+        prefix = ["ip", "netns", "exec", ns]
+        dns_code = """
+import secrets, socket, struct, sys
+tx = secrets.token_bytes(2)
+request = tx + bytes.fromhex("01000001000000000000") + b"\\x07example\\x03com\\x00\\x00\\x01\\x00\\x01"
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+    s.connect((sys.argv[1], 53))
+    s.settimeout(3)
+    for _ in range(2):
+        s.send(request)
+        try:
+            msg = s.recv(4096)
+        except socket.timeout:
+            continue
+        if len(msg) >= 12 and msg[:2] == tx:
+            flags, _, answers = struct.unpack("!HHH", msg[2:8])
+            if flags & 0x8000 and not flags & 15 and answers:
+                sys.exit(0)
+sys.exit(1)
+"""
+        dns = subprocess.run(prefix + [sys.executable, "-c", dns_code, resolver]).returncode == 0
+        http = subprocess.run(prefix + ["curl", "-4", "--noproxy", "*", "-fsS",
+            "--connect-timeout", "5", "--max-time", "12", trace_url], stdout=subprocess.PIPE)
+        stamps = dict(line.split() for line in wg_value("latest-handshakes").splitlines())
+        if int(stamps.get(key, 0)) == 0:
+            raise RuntimeError("тестовый клиент не завершил локальное рукопожатие с wg0")
+        print("Тестовый клиент: WireGuard OK, DNS " + ("OK" if dns else "СБОЙ"), flush=True)
+        if http.returncode:
+            raise RuntimeError("HTTPS от тестового клиента через зарубежный выход завершился ошибкой")
+        ips = [line[3:] for line in http.stdout.decode().splitlines() if line.startswith("ip=")]
+        if len(ips) != 1:
+            raise RuntimeError("служба проверки не вернула один адрес выхода")
+        address = str(ipaddress.IPv4Address(ips[0]))
+        print(f"Тестовый клиент: HTTPS OK, внешний IPv4 {address}", flush=True)
+        if address != expected:
+            print(f"Адрес выхода отличается от адреса подключения {expected}; возможен NAT у хостера.")
+        if not dns:
+            raise RuntimeError("через выход проходит HTTPS, запрос DNS по UDP без подтверждённого ответа")
+        print("На VPS путь WireGuard → зарубежный выход проверен. Доступ из сети устройства проверяется отдельно.")
+    finally:
+        cleanup(state)
+
+def interrupted(number, frame):
+    raise SystemExit(128 + number)
+for sig in (signal.SIGHUP, signal.SIGTERM):
+    signal.signal(sig, interrupted)
+try:
+    probe()
+except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+    sys.exit("family-vpn-install: " + str(error))
+PY
+}
+
+transport_verify_entry() {
+  transport_probe
+  # wg-quick may persist a transient peer on shutdown if SaveConfig is enabled.
+  if grep -Eiq '^[[:space:]]*SaveConfig[[:space:]]*=[[:space:]]*true([[:space:]#]|$)' /etc/wireguard/wg0.conf; then
+    echo "Тестовый клиент пропущен: wg-quick сохраняет работающую конфигурацию при остановке."
+    return
+  fi
+  local expected
+  expected=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["server"])' "$TRANSPORT_DIR/entry-uplink.json")
+  transport_client_probe 1.1.1.1 https://1.1.1.1/cdn-cgi/trace "$expected" /run/family-vpn-client-check.json
 }
 
 # Installer entry point.
@@ -1126,7 +1274,7 @@ if [ "$ROLE" != "direct" ]; then
     if ! wg show wg0 >/dev/null 2>&1; then
       systemctl enable --now wg-quick@wg0
     fi
-    transport_probe
+    transport_verify_entry
     echo "family-vpn-install: paired entry configured; existing agent identity reused"
     exit 0
   fi
@@ -1303,7 +1451,7 @@ systemctl daemon-reload
 systemctl enable --now family-vpn-agent
 # Host firewall/SSH hardening for new installs only (skipped by --update above).
 if [ "$ROLE" = "entry" ]; then
-  transport_probe
+  transport_verify_entry
 else
   harden_fresh_agent_host
 fi
