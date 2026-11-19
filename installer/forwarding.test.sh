@@ -76,10 +76,12 @@ ip netns exec "$client" wg set wg0 private-key "$fixture/client.key" \
 ip -n "$client" addr add 10.220.0.2/32 dev wg0
 ip -n "$client" link set wg0 up
 ip -n "$client" route add 192.0.2.1/32 dev wg0
+ip -n "$client" route add 10.220.0.1/32 dev wg0
 
 # Reproduce UFW's relevant input policy, without changing the runner's firewall.
 ip netns exec "$entry" iptables -P INPUT DROP
 ip netns exec "$entry" iptables -A INPUT -i lo -j ACCEPT
+ip netns exec "$entry" iptables -A INPUT -i wg0 -p icmp --icmp-type echo-request -j ACCEPT
 ip netns exec "$entry" iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 ip netns exec "$entry" iptables -A INPUT -p udp --dport 51820 -j ACCEPT
 transport_write_guard 10.220.0.0/24 >"$fixture/guard.sh"
@@ -127,6 +129,16 @@ for _ in {1..50}; do
 done
 ip -n "$entry" route replace default dev fvpn-tun metric 1 table 51821
 sleep 1
+
+# The entry's own replies to a peer must stay on the local WireGuard link.
+gateway_reply=$(ip -n "$entry" -4 route get 10.220.0.2 from 10.220.0.1)
+echo "entry gateway reply: $gateway_reply"
+if ! grep -qw wg0 <<<"$gateway_reply"; then
+  echo "entry routes a reply for its own WireGuard peer away from wg0" >&2
+  exit 1
+fi
+ip netns exec "$client" ping -4 -c 1 -W 3 10.220.0.1 >/dev/null
+echo "client received an IPv4 echo reply from its local WireGuard gateway"
 
 if ! ip netns exec "$client" curl -fsS --connect-timeout 5 --max-time 10 \
   http://192.0.2.1:8080/probe.txt >"$fixture/response"; then
