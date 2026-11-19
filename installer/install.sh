@@ -597,6 +597,10 @@ An already paired entry agent is reused. Client .conf/QR issuance uses that entr
 The entry keeps VPN forwarding blocked if the foreign transport fails.
 Repeat the same command to repair/restart the transport without rotating exit credentials.
 --preflight validates parameters without installing packages or changing networking.
+On an existing two-hop setup, run the same file with --compare-uplinks on the exit
+first, then on the entry. Both transports are checked with the existing client path.
+A successful WireGuard comparison keeps that inter-server link active. Run
+--use-vless on the entry to switch back. The client profile stays usable in both modes.
 The original install and --update commands remain available with the default --role direct.
 EOF
 }
@@ -849,6 +853,14 @@ else:
                 "utls": {"enabled": True, "fingerprint": "chrome"},
                 "reality": {"enabled": True, "public_key": params["public_key"], "short_id": params["short_id"]}}}],
         "route": {"final": "foreign"}}
+    # Preserve a tested WireGuard selection during an ordinary repair of this same exit.
+    previous = state / "config.json"
+    if previous.exists() and (state / "entry-uplink.json").exists():
+        old = json.loads(previous.read_text())
+        if (old.get("route", {}).get("final") == "family-wg-uplink"
+                and json.loads((state / "entry-uplink.json").read_text()) == params):
+            config["endpoints"] = [ep for ep in old["endpoints"] if ep["tag"] == "family-wg-uplink"]
+            config["route"]["final"] = "family-wg-uplink"
 write("config.json", config)
 PY
   "$TRANSPORT_BIN" check -c "$TRANSPORT_STAGE/config.json"
@@ -1015,6 +1027,7 @@ install_transport() {
       die "entry routing identifiers already in use (10518/51821/fvpn-tun/FVPN_EGRESS)"
     fi
   fi
+  link_recover || die "previous transport switch could not be restored"
   transport_dependencies
   TRANSPORT_STAGE=$(mktemp -d)
   transport_render
@@ -1084,7 +1097,8 @@ transport_client_probe() {
   python3 - "$@" <<'PY'
 import ipaddress, json, os, pathlib, re, secrets, signal, subprocess, sys
 
-resolver, trace_url, expected, journal_path = sys.argv[1:]
+resolver, trace_url, expected, journal_path = sys.argv[1:5]
+strict = sys.argv[5:] == ["strict"]
 journal = pathlib.Path(journal_path)
 def run(*args, data=None):
     return subprocess.run(args, input=data, stdout=subprocess.PIPE, check=True).stdout
@@ -1125,6 +1139,8 @@ def probe():
         if not any(pair.overlaps(other) for other in used):
             break
     else:
+        if strict:
+            raise RuntimeError("для сравнения нужен свободный адрес тестового клиента")
         print("Проверка тестовым клиентом пропущена: в подсети нет подходящей свободной пары адресов.")
         return
     source = str(pair.broadcast_address)
@@ -1186,6 +1202,8 @@ sys.exit(1)
             raise RuntimeError("служба проверки не вернула один адрес выхода")
         address = str(ipaddress.IPv4Address(ips[0]))
         print(f"Тестовый клиент: HTTPS OK, внешний IPv4 {address}", flush=True)
+        if strict and address != expected:
+            raise RuntimeError(f"не подтверждён ожидаемый зарубежный IPv4 {expected}")
         if address != expected:
             print(f"Адрес выхода отличается от адреса подключения {expected}; возможен NAT у хостера.")
         if not dns:
@@ -1209,15 +1227,188 @@ transport_verify_entry() {
   transport_probe
   # wg-quick may persist a transient peer on shutdown if SaveConfig is enabled.
   if grep -Eiq '^[[:space:]]*SaveConfig[[:space:]]*=[[:space:]]*true([[:space:]#]|$)' /etc/wireguard/wg0.conf; then
+    [ "${1:-}" != strict ] || die "сравнение требует проверки тестовым клиентом (SaveConfig включён)"
     echo "Тестовый клиент пропущен: wg-quick сохраняет работающую конфигурацию при остановке."
     return
   fi
   local expected
   expected=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["server"])' "$TRANSPORT_DIR/entry-uplink.json")
-  transport_client_probe 1.1.1.1 https://1.1.1.1/cdn-cgi/trace "$expected" /run/family-vpn-client-check.json
+  transport_client_probe 1.1.1.1 https://1.1.1.1/cdn-cgi/trace "$expected" /run/family-vpn-client-check.json "${1:-normal}"
 }
 
+# Add a userspace WireGuard link to an installed two-hop setup. wg0, its peers
+# and the host routing table belong to the original entry installation.
+link_render() {
+  python3 - "$ROLE" "$TRANSPORT_BIN" "$TRANSPORT_DIR" "$TRANSPORT_STAGE" "$1" <<'PY'
+import base64, ipaddress, json, pathlib, re, subprocess, sys
+role, binary, state, stage, port = sys.argv[1:]
+state, stage = pathlib.Path(state), pathlib.Path(stage)
+def read(path):
+    return json.loads(path.read_text())
+def write(path, data):
+    path.write_text(json.dumps(data, indent=2) + "\n")
+def keypair():
+    output = subprocess.check_output([binary, "generate", "wg-keypair"], text=True)
+    return [re.search(label + r":\s*(\S+)", output).group(1) for label in ("PrivateKey", "PublicKey")]
+def valid_key(key):
+    return isinstance(key, str) and len(base64.b64decode(key, validate=True)) == 32
+def encode(obj):
+    return "FWG1." + base64.urlsafe_b64encode(json.dumps(obj).encode()).decode().rstrip("=")
+
+cfg = read(state / "config.json")
+link = read(state / ("uplink.json" if role == "exit" else "entry-uplink.json"))
+tag = "family-wg-uplink"
+if role == "exit":
+    path = state / "wg-link-keys.json"
+    if path.exists():
+        keys = read(path)
+    else:
+        private, public = keypair()
+        client_private, client_public = keypair()
+        keys = dict(private=private, public=public, client_private=client_private,
+                    client_public=client_public, port=int(port))
+    write(stage / path.name, keys)
+    ticket = [link["server"], link["public_key"], keys["port"], keys["public"], keys["client_private"]]
+    (stage / "link.code").write_text(encode(ticket) + "\n")
+    ep = dict(private_key=keys["private"], address=["10.254.253.1/32"], listen_port=keys["port"],
+              peers=[dict(public_key=keys["client_public"], allowed_ips=["10.254.253.2/32"])])
+else:
+    cfg["route"]["final"] = "foreign"
+    cfg["endpoints"] = [ep for ep in cfg.get("endpoints", []) if ep["tag"] != tag]
+    write(stage / "vless.json", cfg)
+    if port == "vless":
+        sys.exit(0)
+    try:
+        code = (stage / "link.code").read_text().strip()
+        if len(code) > 1500 or not code.startswith("FWG1."):
+            raise ValueError()
+        raw = code[5:]
+        ip, identity, port, public, private = json.loads(base64.b64decode(
+            raw + "=" * (-len(raw) % 4), altchars=b"-_", validate=True))
+        if (str(ipaddress.IPv4Address(ip)) != link["server"] or identity != link["public_key"]
+                or type(port) is not int or not 1 <= port <= 65535
+                or not valid_key(public) or not valid_key(private)):
+            raise ValueError()
+    except (ValueError, TypeError):
+        sys.exit("Код WireGuard повреждён или выдан другим выходным сервером.")
+    ep = dict(private_key=private, address=["10.254.253.2/32"],
+              peers=[dict(address=ip, port=port, public_key=public, allowed_ips=["0.0.0.0/0"],
+                          persistent_keepalive_interval=25)])
+    cfg["route"]["final"] = tag
+ep.update(type="wireguard", tag=tag, system=False, mtu=1280)
+cfg["endpoints"] = [old for old in cfg.get("endpoints", []) if old["tag"] != tag] + [ep]
+write(stage / "wireguard.json", cfg)
+PY
+}
+
+link_install_config() {
+  install -m 600 "$1" "$TRANSPORT_DIR/config.json.next" &&
+    mv -f "$TRANSPORT_DIR/config.json.next" "$TRANSPORT_DIR/config.json" &&
+    systemctl restart family-vpn-transport &&
+    systemctl is-active --quiet family-vpn-transport
+}
+
+link_recover() {
+  local saved="$TRANSPORT_DIR/before-link-switch.json"
+  if [ -f "$saved" ]; then
+    echo "Восстанавливаю предыдущую конфигурацию связи между серверами." >&2
+    link_install_config "$saved" && rm -f "$saved"
+  fi
+}
+
+link_compare() (
+  set -euo pipefail
+  [ "$(id -u)" = 0 ] || die "запустите через sudo"
+  assert_ubuntu_2404
+  umask 077
+  exec 9>/run/lock/family-vpn-transport.lock
+  flock -n 9 || die "another transport installation is running"
+  [ -s "$TRANSPORT_DIR/role" ] || die "сначала установите обычную связь через два сервера"
+  ROLE=$(cat "$TRANSPORT_DIR/role")
+  case "$ROLE" in entry|exit) ;; *) die "unknown installed role" ;; esac
+  TRANSPORT_BIN=$(command -v sing-box) || die "sing-box is missing"
+  link_recover || die "предыдущая конфигурация ожидает восстановления"
+  TRANSPORT_STAGE=$(mktemp -d)
+  trap 'rc=$?; link_recover || rc=1; rm -rf "$TRANSPORT_STAGE"; exit "$rc"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
+  local saved="$TRANSPORT_DIR/before-link-switch.json" port="" candidate
+  if [ "$ROLE" = exit ]; then
+    [ "$1" = compare ] || die "VLESS выбирается только на российском VPS"
+    if [ -f "$TRANSPORT_DIR/wg-link-keys.json" ]; then
+      port=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$TRANSPORT_DIR/wg-link-keys.json")
+    else
+      for candidate in 51821 51822 51823; do
+        if [ -z "$(ss -H -uan "sport = :$candidate")" ]; then port=$candidate; break; fi
+      done
+      [ -n "$port" ] || die "нет свободного UDP-порта для связи серверов"
+    fi
+    link_render "$port"
+    "$TRANSPORT_BIN" check -c "$TRANSPORT_STAGE/wireguard.json"
+    install -m 600 "$TRANSPORT_STAGE/wg-link-keys.json" "$TRANSPORT_DIR/wg-link-keys.json.next"
+    mv -f "$TRANSPORT_DIR/wg-link-keys.json.next" "$TRANSPORT_DIR/wg-link-keys.json"
+    install -m 600 "$TRANSPORT_DIR/config.json" "$saved.next"
+    mv -f "$saved.next" "$saved"
+    link_install_config "$TRANSPORT_STAGE/wireguard.json"
+    sleep 1
+    systemctl is-active --quiet family-vpn-transport
+    ss -H -lun "sport = :$port" | grep -q . || die "зарубежный WireGuard не открыл UDP-порт $port"
+    if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then
+      ufw allow "$port/udp" comment 'family-vpn-wg-uplink'
+    fi
+    rm -f "$saved"
+    echo "Для российского VPS доступны VLESS и WireGuard. Порт WireGuard на зарубежном VPS: $port/UDP."
+    echo "Если у хостера включён внешний firewall, разрешите этот UDP-порт с адреса российского VPS."
+    echo "Скопируйте секретный код в терминал российского VPS:"
+    cat "$TRANSPORT_STAGE/link.code"
+    exit 0
+  fi
+
+  if [ "$1" = compare ]; then
+    if [ -s "$TRANSPORT_DIR/wg-link.code" ]; then
+      install -m 600 "$TRANSPORT_DIR/wg-link.code" "$TRANSPORT_STAGE/link.code"
+    else
+      read -rs -p "Вставьте код FWG1 с зарубежного VPS и нажмите Enter: " candidate </dev/tty || die "ввод прерван"
+      printf '\n'
+      printf '%s\n' "$candidate" >"$TRANSPORT_STAGE/link.code"
+      unset candidate
+    fi
+  fi
+  link_render "$1"
+  "$TRANSPORT_BIN" check -c "$TRANSPORT_STAGE/vless.json"
+  if [ "$1" = compare ]; then "$TRANSPORT_BIN" check -c "$TRANSPORT_STAGE/wireguard.json"; fi
+  install -m 600 "$TRANSPORT_DIR/config.json" "$saved.next"
+  mv -f "$saved.next" "$saved"
+  link_install_config "$TRANSPORT_STAGE/vless.json"
+  if [ "$1" = vless ]; then
+    rm -f "$saved"
+    echo "Между серверами выбран VLESS + REALITY."
+    exit 0
+  fi
+  local vless_result="сбой" wg_result="сбой"
+  echo "A — проверка VLESS + REALITY"
+  if ( transport_verify_entry strict ); then vless_result=OK; fi
+  echo "Б — проверка WireGuard между серверами"
+  if link_install_config "$TRANSPORT_STAGE/wireguard.json" && ( transport_verify_entry strict ); then
+    wg_result=OK
+    install -m 600 "$TRANSPORT_STAGE/link.code" "$TRANSPORT_DIR/wg-link.code.next"
+    mv -f "$TRANSPORT_DIR/wg-link.code.next" "$TRANSPORT_DIR/wg-link.code"
+    rm -f "$saved"
+    echo "Выбран межсерверный WireGuard. Можно включить прежний профиль на телефоне."
+  elif [ "$vless_result" = OK ]; then
+    link_install_config "$TRANSPORT_STAGE/vless.json"
+    rm -f "$saved"
+    echo "Выбран проверенный VLESS + REALITY."
+  fi
+  echo "Итог на VPS: VLESS + REALITY — $vless_result; WireGuard — $wg_result."
+  [ "$wg_result" = OK ]
+)
+
 # Installer entry point.
+case "$*" in
+  --compare-uplinks) link_compare compare; exit $? ;;
+  --use-vless) link_compare vless; exit $? ;;
+esac
 if [ "$#" -eq 0 ]; then
   transport_wizard
 fi

@@ -351,3 +351,54 @@ grep -q 'HTTPS от тестового клиента' "$fixture/probe-broken.lo
 [ ! -e "$fixture/probe-state.json" ]
 ip netns exec "$entry" wg show wg0 allowed-ips | cmp "$fixture/allowed.before" -
 echo "real client probe identified a broken exit and cleaned up after both outcomes"
+
+# Prepare the two production candidates from the existing, successful VLESS setup.
+mkdir "$fixture/link-exit" "$fixture/link-entry" "$fixture/stage-exit" "$fixture/stage-entry"
+cp "$fixture/exit-config/"{uplink,config}.json "$fixture/link-exit/"
+cp "$fixture/entry-config/config.json" "$fixture/link-entry/"
+cp "$fixture/exit-config/uplink.json" "$fixture/link-entry/entry-uplink.json"
+ROLE=exit
+TRANSPORT_DIR="$fixture/link-exit"
+TRANSPORT_STAGE="$fixture/stage-exit"
+link_render 51821
+cp "$TRANSPORT_STAGE/wg-link-keys.json" "$TRANSPORT_DIR/"
+cp "$TRANSPORT_STAGE/link.code" "$fixture/stage-entry/"
+link_render 51822
+cmp "$TRANSPORT_STAGE/link.code" "$fixture/stage-entry/link.code"
+ip netns exec "$target" "$TRANSPORT_BIN" run -c "$TRANSPORT_STAGE/wireguard.json" >"$fixture/exit.log" 2>&1 &
+exit_pid=$!
+ROLE=entry
+TRANSPORT_DIR="$fixture/link-entry"
+TRANSPORT_STAGE="$fixture/stage-entry"
+link_render compare
+kill "$transport_pid"
+wait "$transport_pid" || true
+transport_pid=""
+start_entry_mode() {
+  ip netns exec "$entry" "$TRANSPORT_BIN" run -c "$1" >"$fixture/entry.log" 2>&1 &
+  transport_pid=$!
+  for _ in {1..50}; do
+    if ip -n "$entry" link show fvpn-tun >/dev/null 2>&1; then break; fi
+    sleep 0.1
+  done
+  ip -n "$entry" route replace default dev fvpn-tun metric 1 table 51821
+}
+# Block the working REALITY route while exercising the second link.
+ip netns exec "$entry" iptables -I OUTPUT -d 192.0.2.1 -p tcp --dport 443 -j REJECT
+start_entry_mode "$TRANSPORT_STAGE/wireguard.json"
+real_client_check | tee "$fixture/link-probe.log"
+grep -Fq 'HTTPS OK, внешний IPv4 198.51.100.1' "$fixture/link-probe.log"
+fetch_site >"$fixture/wg-body"
+cmp "$fixture/body" "$fixture/wg-body"
+ip netns exec "$entry" wg show wg0 allowed-ips | cmp "$fixture/allowed.before" -
+echo "same client, UDP DNS, 64 KiB HTTPS and foreign IP verified over WireGuard with inter-server TCP blocked"
+ip netns exec "$entry" iptables -D OUTPUT -d 192.0.2.1 -p tcp --dport 443 -j REJECT
+ip netns exec "$entry" iptables -I OUTPUT -d 192.0.2.1 -p udp --dport 51821 -j DROP
+if fetch_site >/dev/null 2>&1; then echo "WireGuard silently bypassed a blocked link"; exit 1; fi
+kill "$transport_pid"
+wait "$transport_pid" || true
+transport_pid=""
+start_entry_mode "$TRANSPORT_STAGE/vless.json"
+fetch_site >"$fixture/restored-body"
+cmp "$fixture/body" "$fixture/restored-body"
+echo "same profile works on VLESS again with inter-server UDP still blocked"
