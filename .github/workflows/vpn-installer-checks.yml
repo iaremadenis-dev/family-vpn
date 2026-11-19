@@ -35,3 +35,13 @@ jobs:
           for test in installer/*.test.sh; do
             bash "$test"
           done
+      - name: Actual WireGuard forwarding with restrictive input firewall
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y wireguard-tools
+          if sudo env FAMILY_VPN_TEST_NETNS=1 FAMILY_VPN_TEST_STACK=system FAMILY_VPN_TEST_SING_BOX="$FAMILY_VPN_TEST_SING_BOX" bash installer/forwarding.test.sh; then
+            echo 'System-stack baseline also passes on this runner'
+          else
+            echo 'System-stack baseline fails with restrictive INPUT policy'
+          fi
+          sudo env FAMILY_VPN_TEST_NETNS=1 FAMILY_VPN_TEST_SING_BOX="$FAMILY_VPN_TEST_SING_BOX" bash installer/forwarding.test.sh

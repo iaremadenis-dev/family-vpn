@@ -114,6 +114,7 @@ assert len(entry["outbounds"]) == 1 and outbound["type"] == "vless"
 assert entry["route"]["final"] == outbound["tag"]
 assert outbound["packet_encoding"] == "xudp" and "network" not in outbound
 assert entry["inbounds"][0]["auto_route"] is False
+assert entry["inbounds"][0]["stack"] == "gvisor"
 assert entry["inbounds"][0]["address"] == ["198.18.255.1/30"]
 bad = dict(params, private_key="must never be accepted")
 (root / "bad.json").write_text(json.dumps(bad))

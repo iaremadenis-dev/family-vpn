@@ -832,7 +832,7 @@ else:
     config = {
         "log": {"level": "warn"},
         "inbounds": [{"type": "tun", "tag": "vpn", "interface_name": "fvpn-tun",
-            "address": [tun], "mtu": 1400, "auto_route": False, "stack": "system"}],
+            "address": [tun], "mtu": 1400, "auto_route": False, "stack": "gvisor"}],
         "outbounds": [{"type": "vless", "tag": "foreign", "server": params["server"],
             "server_port": params["server_port"], "uuid": params["uuid"], "flow": "xtls-rprx-vision",
             "packet_encoding": "xudp", "tls": {"enabled": True, "server_name": params["server_name"],
