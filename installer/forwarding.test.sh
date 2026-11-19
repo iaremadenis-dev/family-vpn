@@ -38,6 +38,7 @@ ip -n "$target" addr add 192.0.2.1/30 dev fv-exit
 ip -n "$target" link set fv-exit up
 ip -n "$entry" addr add 192.0.2.2/30 dev fv-entry
 ip -n "$entry" link set fv-entry up
+ip -n "$entry" route add default via 192.0.2.1
 ip -n "$target" route add 10.220.0.0/24 via 192.0.2.2
 ip link add fv-wan type veth peer name fv-client
 ip link set fv-wan netns "$entry"
@@ -132,8 +133,7 @@ s.sendto(b"udp-forwarding-ok", ("192.0.2.1", 5353))
 assert s.recv(4096) == b"udp-forwarding-ok"
 PY
 
-# Retain an independently reachable main-table route to expose a direct fallback.
-ip -n "$entry" route add default via 192.0.2.1
+# The independently reachable main-table default must not become a direct fallback.
 kill "$transport_pid"
 wait "$transport_pid" || true
 transport_pid=""
