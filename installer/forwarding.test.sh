@@ -84,6 +84,25 @@ ip netns exec "$entry" iptables -A INPUT -i lo -j ACCEPT
 ip netns exec "$entry" iptables -A INPUT -i wg0 -p icmp --icmp-type echo-request -j ACCEPT
 ip netns exec "$entry" iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 ip netns exec "$entry" iptables -A INPUT -p udp --dport 51820 -j ACCEPT
+# Installation on a clean entry applies the guard once before wg-quick creates wg0.
+# Use a fresh namespace to exercise that order, subsequent link loss and reattachment.
+(
+  boot="fvpn-boot-$$"
+  ip netns add "$boot"
+  trap 'ip netns delete "$boot"' EXIT
+  transport_write_guard 10.220.0.0/24 >"$fixture/boot-guard.sh"
+  ip netns exec "$boot" bash "$fixture/boot-guard.sh"
+  ip -n "$boot" route show table 51821 | grep -q '^unreachable 10.220.0.0/24'
+  for attempt in 1 2; do
+    ip -n "$boot" link add wg0 type wireguard
+    ip -n "$boot" address add 10.220.0.1/24 dev wg0
+    ip -n "$boot" link set wg0 up
+    ip netns exec "$boot" bash "$fixture/boot-guard.sh"
+    ip -n "$boot" route get 10.220.0.2 from 10.220.0.1 | grep -qw wg0
+    ip -n "$boot" link delete wg0
+    ip -n "$boot" route show table 51821 | grep -q '^unreachable 10.220.0.0/24'
+  done
+)
 transport_write_guard 10.220.0.0/24 >"$fixture/guard.sh"
 ip netns exec "$entry" bash "$fixture/guard.sh"
 

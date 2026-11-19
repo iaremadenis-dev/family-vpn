@@ -858,6 +858,12 @@ iptables -w -C FORWARD -j FVPN_EGRESS 2>/dev/null || iptables -w -I FORWARD 1 -j
 # Client profiles currently provide IPv4 addresses only. Explicitly block forwarded IPv6.
 ip6tables -w -C FORWARD -i wg0 -j DROP 2>/dev/null || ip6tables -w -I FORWARD 1 -i wg0 -j DROP
 ip -4 route replace unreachable default metric 32767 table 51821
+# Gateway replies also match the source policy. Keep peer destinations on wg0.
+# The more specific unreachable route survives removal of the interface.
+ip -4 route replace unreachable $network metric 32767 table 51821
+if ip link show dev wg0 >/dev/null 2>&1; then
+  ip -4 route replace $network dev wg0 scope link metric 1 table 51821
+fi
 if ! ip -4 rule show | grep -Eq '^10518:.*from ${network//./\\.} .*lookup 51821'; then
   if ip -4 rule show | grep -q '^10518:'; then
     echo 'family-vpn: policy priority 10518 already in use' >&2
@@ -893,6 +899,9 @@ EOF
 [Unit]
 Requires=family-vpn-egress-guard.service
 After=family-vpn-egress-guard.service
+
+[Service]
+ExecStartPost=/usr/local/lib/family-vpn/egress-guard.sh
 EOF
   systemctl daemon-reload
   systemctl enable family-vpn-egress-guard.service
