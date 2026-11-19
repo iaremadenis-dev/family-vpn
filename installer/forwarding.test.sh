@@ -402,3 +402,47 @@ start_entry_mode "$TRANSPORT_STAGE/vless.json"
 fetch_site >"$fixture/restored-body"
 cmp "$fixture/body" "$fixture/restored-body"
 echo "same profile works on VLESS again with inter-server UDP still blocked"
+
+# Exercise the command's commit/rollback logic independently of the real transport
+# transfers above. Only service activation and probe outcomes are substituted.
+cp "$fixture/stage-entry/link.code" "$fixture/link-entry/wg-link.code"
+printf 'entry\n' >"$fixture/link-entry/role"
+mkdir "$fixture/bin"
+ln -s "$TRANSPORT_BIN" "$fixture/bin/sing-box"
+cat >"$fixture/switch-driver.sh" <<'DRIVER'
+set -euo pipefail
+source "$1/functions.sh"
+TRANSPORT_DIR="$1/link-entry"
+export PATH="$1/bin:$PATH"
+mode() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["route"]["final"])' "$TRANSPORT_DIR/config.json"; }
+systemctl() { [ "$1" != restart ] || [ "$(mode)" != "$FAIL_START" ]; }
+transport_verify_entry() { [ "$1" = strict ] && [ "$(mode)" != "$FAIL_PROBE" ] && [ "$FAIL_PROBE" != both ]; }
+link_compare "$2" </dev/null
+DRIVER
+run_switch() { FAIL_START="$2" FAIL_PROBE="$3" bash "$fixture/switch-driver.sh" "$fixture" "$1"; }
+run_switch compare foreign none
+cmp "$fixture/stage-entry/wireguard.json" "$fixture/link-entry/config.json"
+# An ordinary repair must keep the selected uplink.
+TRANSPORT_DIR="$fixture/link-entry"
+TRANSPORT_STAGE="$fixture/entry-config"
+UPLINK_FILE="$TRANSPORT_DIR/entry-uplink.json"
+ip() { command ip netns exec "$entry" ip "$@"; }
+transport_render
+unset -f ip
+python3 - "$TRANSPORT_STAGE/config.json" <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1]))
+assert c["route"]["final"] == "family-wg-uplink" and c["endpoints"][0]["type"] == "wireguard"
+PY
+if run_switch compare none both; then echo "reported success when both probes failed"; exit 1; fi
+cmp "$fixture/stage-entry/wireguard.json" "$fixture/link-entry/config.json"
+if run_switch compare family-wg-uplink none; then echo "reported success after WG startup failure"; exit 1; fi
+python3 - "$fixture/link-entry/config.json" <<'PY'
+import json, sys
+assert json.load(open(sys.argv[1]))["route"]["final"] == "foreign"
+PY
+run_switch compare none none
+run_switch vless none none
+[ ! -e "$fixture/link-entry/before-link-switch.json" ]
+cmp "$fixture/stage-entry/vless.json" "$fixture/link-entry/config.json"
+echo "startup and probe failures restore the selected mode; explicit return and ordinary repair preserve the selection"

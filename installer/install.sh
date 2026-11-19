@@ -1365,29 +1365,33 @@ link_compare() (
   fi
 
   if [ "$1" = compare ]; then
+    local prompt="Вставьте код FWG1 с зарубежного VPS и нажмите Enter: "
     if [ -s "$TRANSPORT_DIR/wg-link.code" ]; then
       install -m 600 "$TRANSPORT_DIR/wg-link.code" "$TRANSPORT_STAGE/link.code"
-    else
-      read -rs -p "Вставьте код FWG1 с зарубежного VPS и нажмите Enter: " candidate </dev/tty || die "ввод прерван"
+      prompt="Enter — использовать прежний код FWG1; либо вставьте новый код: "
+    fi
+    if [ -t 0 ] || [ ! -s "$TRANSPORT_STAGE/link.code" ]; then
+      read -rs -p "$prompt" candidate </dev/tty || die "ввод прерван"
       printf '\n'
-      printf '%s\n' "$candidate" >"$TRANSPORT_STAGE/link.code"
+      if [ -n "$candidate" ]; then printf '%s\n' "$candidate" >"$TRANSPORT_STAGE/link.code"; fi
       unset candidate
     fi
+    [ -s "$TRANSPORT_STAGE/link.code" ] || die "нужен код FWG1 с зарубежного VPS"
   fi
   link_render "$1"
   "$TRANSPORT_BIN" check -c "$TRANSPORT_STAGE/vless.json"
   if [ "$1" = compare ]; then "$TRANSPORT_BIN" check -c "$TRANSPORT_STAGE/wireguard.json"; fi
   install -m 600 "$TRANSPORT_DIR/config.json" "$saved.next"
   mv -f "$saved.next" "$saved"
-  link_install_config "$TRANSPORT_STAGE/vless.json"
   if [ "$1" = vless ]; then
+    link_install_config "$TRANSPORT_STAGE/vless.json"
     rm -f "$saved"
     echo "Между серверами выбран VLESS + REALITY."
     exit 0
   fi
   local vless_result="сбой" wg_result="сбой"
   echo "A — проверка VLESS + REALITY"
-  if ( transport_verify_entry strict ); then vless_result=OK; fi
+  if link_install_config "$TRANSPORT_STAGE/vless.json" && ( transport_verify_entry strict ); then vless_result=OK; fi
   echo "Б — проверка WireGuard между серверами"
   if link_install_config "$TRANSPORT_STAGE/wireguard.json" && ( transport_verify_entry strict ); then
     wg_result=OK
