@@ -307,7 +307,9 @@ old_key=$(wg genkey | wg pubkey)
 ip netns exec "$entry" wg set wg0 peer "$old_key" allowed-ips 10.220.0.246/31
 printf '{"ns":"%s","public":"%s"}\n' "$old_ns" "$old_key" >"$fixture/probe-state.json"
 real_client_check() {
-  ip netns exec "$entry" env CURL_CA_BUNDLE="$fixture/tls.crt" bash -c '
+  # Enter only the simulated VPS network. Keep its named-namespace mount table
+  # available across runs, just as it is for an installer started from SSH.
+  nsenter --net="/run/netns/$entry" env CURL_CA_BUNDLE="$fixture/tls.crt" bash -c '
     source "$1"
     transport_client_probe 198.51.100.2 https://198.51.100.2/cdn-cgi/trace 198.51.100.1 "$2"
   ' bash "$fixture/functions.sh" "$fixture/probe-state.json"
