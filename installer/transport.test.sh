@@ -168,6 +168,28 @@ if grep -Eq 'MASQUERADE|ip route flush|iptables.*-F' "$TEST_DIR/guard.sh"; then
   exit 1
 fi
 
+# Reconfiguring a healthy installation needs no APT lock. A missing or
+# unconfigured dependency must still use the normal install path.
+(
+  TRANSPORT_DIR="$TEST_DIR/state"
+  sing-box() { return 0; }
+  apt-get() { printf '%s\n' "$*" >>"$TEST_DIR/apt-calls"; }
+  dpkg-query() {
+    shift 2
+    printf 'installed\n%.0s' "$@"
+  }
+  transport_dependencies
+  [ ! -e "$TEST_DIR/apt-calls" ]
+  [ -n "$TRANSPORT_BIN" ]
+  dpkg-query() { printf 'installed\n%.0s' {1..6}; return 1; }
+  transport_dependencies
+  grep -Fxq -- '-o DPkg::Lock::Timeout=900 install -y ca-certificates curl python3 iproute2 iptables openssl util-linux' "$TEST_DIR/apt-calls"
+  : >"$TEST_DIR/apt-calls"
+  dpkg-query() { printf 'installed\n%.0s' {1..6}; echo unpacked; }
+  transport_dependencies
+  grep -Fxq 'update -y' "$TEST_DIR/apt-calls"
+)
+
 # Exercise service-start failure with paths redirected into the temporary fixture.
 sed "s|/etc/systemd/system|$TEST_DIR/units|g" "$TEST_DIR/functions.sh" >"$TEST_DIR/failure-functions.sh"
 (

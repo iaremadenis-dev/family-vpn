@@ -35,6 +35,8 @@ jobs:
           for test in installer/*.test.sh; do
             bash "$test"
           done
+      - name: Wait for a concurrent dpkg operation
+        run: sudo env FAMILY_VPN_TEST_DPKG_LOCK=1 bash installer/package-lock.test.sh
       - name: Actual WireGuard forwarding with restrictive input firewall
         run: |
           sudo apt-get update -y

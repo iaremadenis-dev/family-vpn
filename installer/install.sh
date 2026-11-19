@@ -71,6 +71,10 @@ require_cmd() {
   command -v "$1" >/dev/null || die "$1 is required"
 }
 
+install_packages() {
+  apt-get -o DPkg::Lock::Timeout=900 install -y "$@"
+}
+
 self_check() {
   require_cmd sha256sum
   local got again
@@ -350,7 +354,7 @@ EOF
 configure_ufw_agent() {
   local wan wg_port
   export DEBIAN_FRONTEND=noninteractive
-  apt-get install -y ufw >/dev/null
+  install_packages ufw >/dev/null
   # Let WireGuard PostUp own filter FORWARD / NAT; UFW must not drop forwarded WG traffic.
   if [ -f /etc/default/ufw ]; then
     sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
@@ -651,7 +655,7 @@ transport_wizard() {
     || ! command -v openssl >/dev/null || ! command -v ss >/dev/null; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
-    apt-get install -y python3 curl ca-certificates openssl iproute2
+    install_packages python3 curl ca-certificates openssl iproute2
   fi
   if [ "$ROLE" = "exit" ]; then
     if [ -f "$TRANSPORT_DIR/uplink.json" ]; then
@@ -760,9 +764,15 @@ PY
 }
 
 transport_dependencies() {
+  local packages=(ca-certificates curl python3 iproute2 iptables openssl util-linux)
   export DEBIAN_FRONTEND=noninteractive
+  if [ -s "$TRANSPORT_DIR/config.json" ] && TRANSPORT_BIN=$(command -v sing-box) &&
+    dpkg-query -W -f='${db:Status-Status}\n' "${packages[@]}" 2>/dev/null |
+      awk -v count="${#packages[@]}" '$0 != "installed" { bad=1 } END { exit (bad || NR != count) }'; then
+    return 0
+  fi
   apt-get update -y
-  apt-get install -y ca-certificates curl python3 iproute2 iptables openssl util-linux
+  install_packages "${packages[@]}"
   if ! command -v sing-box >/dev/null; then
     # Official signed APT repository. No downloaded shell script is executed.
     install -d -m 755 /etc/apt/keyrings
@@ -777,7 +787,7 @@ Enabled: yes
 Signed-By: /etc/apt/keyrings/sagernet.asc
 EOF
     apt-get update -y
-    apt-get install -y sing-box
+    install_packages sing-box
   fi
   TRANSPORT_BIN=$(command -v sing-box)
 }
@@ -1234,7 +1244,7 @@ else
   require_cmd apt-get
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  apt-get install -y wireguard iptables
+  install_packages wireguard iptables
   iface=$(detect_wan_iface)
   [ -n "$iface" ] || die "could not detect the external network interface from the default route"
   echo "family-vpn-install: WAN iface from default route: $iface"
