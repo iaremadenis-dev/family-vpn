@@ -319,6 +319,21 @@ grep -q 'HTTPS OK, внешний IPv4 198.51.100.1' "$fixture/probe-ok.log"
 grep -q 'WireGuard OK, DNS OK' "$fixture/probe-ok.log"
 [ ! -e "$fixture/probe-state.json" ] && [ ! -e "/run/netns/$old_ns" ]
 ip netns exec "$entry" wg show wg0 allowed-ips | cmp "$fixture/allowed.before" -
+# A locally sourced HTTP check can stay green while forwarded clients get nothing.
+ip netns exec "$entry" iptables -I FORWARD 1 -i wg0 -j DROP
+ip netns exec "$entry" curl -4 --noproxy '*' -fsS --interface 10.220.0.1 \
+  --cacert "$fixture/tls.crt" --connect-timeout 4 --max-time 10 \
+  https://198.51.100.2/cdn-cgi/trace | grep -Fxq 'ip=198.51.100.1'
+if real_client_check >"$fixture/probe-shadowed.log" 2>&1; then
+  echo "a host-only check masked a broken client path" >&2
+  exit 1
+fi
+grep -q 'WireGuard OK, DNS СБОЙ' "$fixture/probe-shadowed.log"
+ip netns exec "$entry" bash "$fixture/guard.sh"
+real_client_check | grep -q 'На VPS путь WireGuard'
+ip netns exec "$entry" iptables -C FORWARD -i wg0 -j DROP
+ip netns exec "$entry" wg show wg0 allowed-ips | cmp "$fixture/allowed.before" -
+echo "reproduced host HTTPS success with broken client forwarding; repair restored client DNS and HTTPS"
 kill "$exit_pid"
 wait "$exit_pid" || true
 exit_pid=""
