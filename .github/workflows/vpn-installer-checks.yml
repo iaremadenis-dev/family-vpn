@@ -1,0 +1,49 @@
+name: VPN installer checks
+
+on:
+  pull_request:
+    paths:
+      - "installer/**"
+      - ".github/workflows/vpn-installer-checks.yml"
+  push:
+    branches: [main]
+    paths:
+      - "installer/**"
+      - ".github/workflows/vpn-installer-checks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download pinned sing-box for offline configuration validation
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64.tar.gz -o /tmp/sing-box.tar.gz
+          echo '699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968  /tmp/sing-box.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/sing-box.tar.gz -C /tmp
+          echo 'FAMILY_VPN_TEST_SING_BOX=/tmp/sing-box-1.14.4-linux-amd64/sing-box' >> "$GITHUB_ENV"
+      - name: Installer compatibility and transport checks
+        run: |
+          set -euo pipefail
+          bash -n installer/install.sh
+          bash installer/install.sh --help
+          for test in installer/*.test.sh; do
+            bash "$test"
+          done
+      - name: Wait for a concurrent dpkg operation
+        run: sudo env FAMILY_VPN_TEST_DPKG_LOCK=1 bash installer/package-lock.test.sh
+      - name: Actual WireGuard forwarding with restrictive input firewall
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y wireguard-tools dnsmasq-base dnsutils iputils-ping
+          if sudo env FAMILY_VPN_TEST_NETNS=1 FAMILY_VPN_TEST_STACK=system FAMILY_VPN_TEST_SING_BOX="$FAMILY_VPN_TEST_SING_BOX" bash installer/forwarding.test.sh; then
+            echo 'System-stack baseline also passes on this runner'
+          else
+            echo 'System-stack baseline fails with restrictive INPUT policy'
+          fi
+          sudo env FAMILY_VPN_TEST_NETNS=1 FAMILY_VPN_TEST_SING_BOX="$FAMILY_VPN_TEST_SING_BOX" bash installer/forwarding.test.sh
