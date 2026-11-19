@@ -1,5 +1,5 @@
 #!/bin/bash
-# Privileged Linux regression: actual WireGuard -> TUN -> HTTP/UDP with INPUT deny.
+# Test the local forwarding path, then the complete WireGuard -> VLESS -> exit path.
 # All interfaces, keys and test servers live in disposable network namespaces.
 set -euo pipefail
 if [ "${FAMILY_VPN_TEST_NETNS:-}" != 1 ]; then
@@ -14,15 +14,27 @@ source "$fixture/functions.sh"
 entry="fvpn-entry-$$"
 client="fvpn-client-$$"
 target="fvpn-target-$$"
+site="fvpn-site-$"
+exit_pid=""
+dns_pid=""
+https_pid=""
+ns_files=""
 transport_pid=""
 http_pid=""
 udp_pid=""
 netns_cleanup() {
+  local rc=$?
   set +e
-  for pid in "$transport_pid" "$http_pid" "$udp_pid"; do
+  if [ "$rc" -ne 0 ]; then
+    for log in exit entry https dns; do
+      if [ -f "$fixture/$log.log" ]; then tail -30 "$fixture/$log.log" >&2; fi
+    done
+  fi
+  for pid in "$transport_pid" "$exit_pid" "$dns_pid" "$https_pid" "$http_pid" "$udp_pid"; do
     if [ -n "$pid" ]; then kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; fi
   done
-  for ns in "$entry" "$client" "$target"; do ip netns delete "$ns" 2>/dev/null; done
+  for ns in "$entry" "$client" "$target" "$site"; do ip netns delete "$ns" 2>/dev/null; done
+  if [ -n "$ns_files" ]; then rm -f "$ns_files/hosts" "$ns_files/resolv.conf"; rmdir "$ns_files"; fi
   rm -rf "$fixture"
 }
 trap netns_cleanup EXIT
@@ -145,3 +157,109 @@ if ip netns exec "$client" curl -fsS --connect-timeout 2 --max-time 3 \
 fi
 ip -n "$entry" route show table 51821 | grep -q 'unreachable default'
 echo "actual WireGuard/TUN TCP, UDP, source-bound probe and fail-closed shutdown passed"
+
+# Keep the old system-stack experiment independent of the required full-chain test.
+[ "${FAMILY_VPN_TEST_STACK:-}" != system ] || exit 0
+
+# The original target becomes the exit VPS. A fourth namespace serves HTTPS and DNS.
+# Disable IP forwarding on the exit: only the exit proxy can contact this site for a client.
+ip netns add "$site"
+ip -n "$site" link set lo up
+ip link add fv-public type veth peer name fv-site
+ip link set fv-public netns "$target"
+ip link set fv-site netns "$site"
+ip -n "$target" addr add 198.51.100.1/30 dev fv-public
+ip -n "$site" addr add 198.51.100.2/30 dev fv-site
+ip -n "$target" link set fv-public up
+ip -n "$site" link set fv-site up
+ip -n "$target" route add default via 198.51.100.2
+ip netns exec "$target" sysctl -qw net.ipv4.ip_forward=0
+ip -n "$client" route add default dev wg0
+
+# Map the REALITY handshake host only inside the exit namespace.
+mkdir -p /etc/netns
+mkdir "/etc/netns/$target"
+ns_files="/etc/netns/$target"
+printf '127.0.0.1 localhost\n198.51.100.2 cover.test\n' >"$ns_files/hosts"
+printf 'nameserver 198.51.100.2\n' >"$ns_files/resolv.conf"
+ip netns exec "$site" dnsmasq --keep-in-foreground --no-resolv --no-hosts \
+  --bind-interfaces --listen-address=198.51.100.2 --pid-file= \
+  --address=/probe.test/198.51.100.2 --address=/cover.test/198.51.100.2 >"$fixture/dns.log" 2>&1 &
+dns_pid=$!
+
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=probe.test' \
+  -addext 'subjectAltName=DNS:cover.test,DNS:probe.test' \
+  -keyout "$fixture/tls.key" -out "$fixture/tls.crt" 2>/dev/null
+cat >"$fixture/https.py" <<'PY'
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ssl
+import sys
+
+class Probe(BaseHTTPRequestHandler):
+    def do_GET(self):
+        data = (self.client_address[0] + "\n").encode() + bytes(range(256)) * 256
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+server = ThreadingHTTPServer(("198.51.100.2", 443), Probe)
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+ctx.set_ecdh_curve("X25519")
+ctx.set_alpn_protocols(["http/1.1"])
+ctx.load_cert_chain(sys.argv[1], sys.argv[2])
+server.socket = ctx.wrap_socket(server.socket, server_side=True)
+server.serve_forever()
+PY
+ip netns exec "$site" python3 "$fixture/https.py" "$fixture/tls.crt" "$fixture/tls.key" >"$fixture/https.log" 2>&1 &
+https_pid=$!
+
+mkdir "$fixture/exit-config" "$fixture/entry-config" "$fixture/state"
+TRANSPORT_DIR="$fixture/state"
+TRANSPORT_STAGE="$fixture/exit-config"
+ROLE=exit
+SERVER_NAME=cover.test
+PUBLIC_ADDRESS=192.0.2.1
+TRANSPORT_PORT=443
+transport_render
+ip netns exec "$target" "$TRANSPORT_BIN" run -c "$TRANSPORT_STAGE/config.json" >"$fixture/exit.log" 2>&1 &
+exit_pid=$!
+ROLE=entry
+TRANSPORT_STAGE="$fixture/entry-config"
+UPLINK_FILE="$fixture/exit-config/uplink.json"
+ip() { command ip netns exec "$entry" ip "$@"; }
+transport_render
+unset -f ip
+ip netns exec "$entry" "$TRANSPORT_BIN" run -c "$TRANSPORT_STAGE/config.json" >"$fixture/entry.log" 2>&1 &
+transport_pid=$!
+for _ in {1..50}; do
+  if ip -n "$entry" link show fvpn-tun >/dev/null 2>&1 && \
+      ip netns exec "$target" ss -H -ltn 'sport = :443' | grep -q . && \
+      ip netns exec "$site" ss -H -ltn 'sport = :443' | grep -q .; then break; fi
+  sleep 0.1
+done
+ip -n "$entry" route replace default dev fvpn-tun metric 1 table 51821
+answer=$(ip netns exec "$client" dig +short +notcp +ignore +time=3 +tries=2 @198.51.100.2 probe.test. A)
+[ "$answer" = 198.51.100.2 ] || { echo "client DNS over UDP/53 failed" >&2; exit 1; }
+echo "client received a DNS answer through WireGuard, VLESS/REALITY and the exit"
+fetch_site() {
+  ip netns exec "$client" curl -4 --noproxy '*' -fsS --connect-timeout 4 --max-time 12 \
+    --cacert "$fixture/tls.crt" --resolve "probe.test:443:$answer" https://probe.test/probe
+}
+fetch_site >"$fixture/body"
+python3 - "$fixture/body" <<'PY'
+from pathlib import Path
+import sys
+
+assert Path(sys.argv[1]).read_bytes() == b"198.51.100.1\n" + bytes(range(256)) * 256
+PY
+echo "client verified TLS, exit source address and the full 64 KiB response"
+kill "$exit_pid"
+wait "$exit_pid" || true
+exit_pid=""
+if fetch_site >/dev/null 2>&1; then
+  echo "client HTTPS succeeded with the foreign exit stopped" >&2
+  exit 1
+fi
+echo "stopping only the foreign exit breaks client HTTPS as expected"

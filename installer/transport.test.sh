@@ -130,6 +130,30 @@ for invalid in bad local port; do
   fi
 done
 
+# The host check must identify a wrong route, malformed response and a different egress IP.
+(
+  TRANSPORT_DIR="$TEST_DIR/state"
+  TRANSPORT_STAGE="$TEST_DIR/entry"
+  cp "$TEST_DIR/exit/uplink.json" "$TRANSPORT_DIR/entry-uplink.json"
+  route_dev=fvpn-tun
+  forward=1
+  trace_ip=8.8.8.8
+  ip() {
+    if [ "$1" = -o ]; then echo '3: wg0 inet 10.220.0.1/24'; else echo "1.1.1.1 dev $route_dev table 51821"; fi
+  }
+  sysctl() { echo "$forward"; }
+  curl() { printf 'ip=%s\n' "$trace_ip" >"$TRANSPORT_STAGE/probe.txt"; }
+  transport_probe >"$TEST_DIR/probe.log"
+  grep -q 'used the configured exit IPv4' "$TEST_DIR/probe.log"
+  trace_ip=9.9.9.9
+  transport_probe >"$TEST_DIR/probe.log" 2>&1
+  grep -q 'Exit IP unconfirmed' "$TEST_DIR/probe.log"
+  if grep -q 'used the configured exit IPv4' "$TEST_DIR/probe.log"; then exit 1; fi
+  if (trace_ip=bogus; transport_probe) >/dev/null 2>&1; then exit 1; fi
+  if (route_dev=eth0; transport_probe) >/dev/null 2>&1; then exit 1; fi
+  if (forward=0; transport_probe) >/dev/null 2>&1; then exit 1; fi
+)
+
 transport_write_guard 10.221.0.0/24 >"$TEST_DIR/guard.sh"
 bash -n "$TEST_DIR/guard.sh"
 grep -q 'unreachable default metric 32767 table 51821' "$TEST_DIR/guard.sh"

@@ -1017,14 +1017,37 @@ install_transport() {
 }
 
 transport_probe() {
-  local host_address
+  local host_address route expected observed
   host_address=$(ip -o -4 addr show dev wg0 | awk '{split($4, a, "/"); print a[1]; exit}')
-  [ -n "$host_address" ] || die "entry wg0 is down; forwarding stays fail-closed"
-  curl -4 -fsS --interface "$host_address" --connect-timeout 10 --max-time 20 \
+  [ -n "$host_address" ] || die "entry wg0 is down"
+  [ "$(sysctl -n net.ipv4.ip_forward)" = 1 ] || die "IPv4 forwarding is disabled on the entry"
+  route=$(ip -4 route get 1.1.1.1 from "$host_address") || die "entry has no route for its HTTPS check"
+  case " $route " in
+    *" dev fvpn-tun "*) ;;
+    *) die "entry HTTPS check would bypass fvpn-tun" ;;
+  esac
+  curl -4 --noproxy '*' -fsS --interface "$host_address" --connect-timeout 10 --max-time 20 \
     https://1.1.1.1/cdn-cgi/trace -o "$TRANSPORT_STAGE/probe.txt" \
-    || die "entry installed but HTTPS through the foreign exit failed; forwarding stays fail-closed"
-  grep -q '^ip=' "$TRANSPORT_STAGE/probe.txt" || die "foreign exit probe returned an unexpected response"
-  echo "family-vpn-install: foreign exit HTTPS probe passed"
+    || die "HTTPS from the entry through fvpn-tun failed"
+  expected=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["server"])' "$TRANSPORT_DIR/entry-uplink.json")
+  observed=$(python3 - "$TRANSPORT_STAGE/probe.txt" <<'PY'
+import ipaddress, pathlib, sys
+ips = [line[3:] for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.startswith("ip=")]
+if len(ips) != 1:
+    sys.exit(1)
+try:
+    print(ipaddress.IPv4Address(ips[0]))
+except ValueError:
+    sys.exit(1)
+PY
+  ) || die "entry HTTPS check returned an invalid IPv4 address"
+  if [ "$observed" = "$expected" ]; then
+    echo "family-vpn-install: HTTPS from the entry used the configured exit IPv4 ($observed)"
+  else
+    # A VPS may legitimately send traffic from a different address behind provider NAT.
+    echo "family-vpn-install: HTTPS from the entry returned IPv4 $observed; configured endpoint is $expected. Exit IP unconfirmed." >&2
+  fi
+  echo "family-vpn-install: the phone's WireGuard connection and client DNS require a separate client check"
 }
 
 # Installer entry point.
